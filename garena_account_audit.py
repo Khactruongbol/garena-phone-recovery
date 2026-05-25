@@ -6,6 +6,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
+from urllib.parse import urlparse
 
 import aiofiles
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -80,6 +81,13 @@ def extract_last_4(masked_phone: str) -> str:
     return ""
 
 
+def is_still_on_login_page(url: str) -> bool:
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    path = (parsed.path or "").lower()
+    return hostname == "sso.garena.com" and "/login" in path
+
+
 async def fetch_masked_phone(page) -> str:
     candidates = [
         SELECTORS["masked_phone"],
@@ -139,7 +147,7 @@ async def audit_account(
                 result.error = "CAPTCHA detected after login."
                 return result
 
-            if "sso.garena.com" in page.url.lower() and "login" in page.url.lower():
+            if is_still_on_login_page(page.url):
                 result.status = "failed"
                 result.error = "Invalid credentials or login blocked."
                 return result
