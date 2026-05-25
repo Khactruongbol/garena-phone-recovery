@@ -60,6 +60,7 @@
 
         input[type="text"],
         input[type="password"],
+        input[type="number"],
         textarea {
             width: 100%;
             padding: 12px;
@@ -71,6 +72,7 @@
 
         input[type="text"]:focus,
         input[type="password"]:focus,
+        input[type="number"]:focus,
         textarea:focus {
             outline: none;
             border-color: #667eea;
@@ -162,6 +164,11 @@
             background: #fff8f3;
         }
 
+        .result-item.processing {
+            border-left-color: #2196f3;
+            background: #e3f2fd;
+        }
+
         .result-username {
             font-weight: 600;
             color: #333;
@@ -193,6 +200,11 @@
             color: white;
         }
 
+        .status-processing {
+            background: #2196f3;
+            color: white;
+        }
+
         .result-details {
             font-size: 13px;
             color: #666;
@@ -214,6 +226,22 @@
             color: #4caf50;
             text-align: center;
             border: 2px solid #4caf50;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #e0e0e0;
+            border-radius: 3px;
+            margin: 8px 0;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #667eea;
+            width: 0%;
+            transition: width 0.3s;
         }
 
         .loading {
@@ -327,6 +355,17 @@
             color: #b71c1c;
         }
 
+        .phase-badge.processing {
+            background: #bbdefb;
+            color: #0d47a1;
+        }
+
+        .attempt-info {
+            font-size: 12px;
+            color: #999;
+            margin-top: 5px;
+        }
+
         @media (max-width: 600px) {
             .container {
                 padding: 20px;
@@ -356,10 +395,11 @@
         <div class="info-box">
             ℹ️ <strong>Hướng Dẫn:</strong>
             <br>1. Nhập tài khoản Garena (format: <code>user:pass</code>)
-            <br>2. Tài khoản này sẽ được dùng để:
-            <br>&nbsp;&nbsp;&nbsp;• Đăng nhập Garena lấy 4 chữ số cuối
-            <br>&nbsp;&nbsp;&nbsp;• Đăng nhập napthe.vn lấy 3 chữ số đầu
-            <br>&nbsp;&nbsp;&nbsp;• Brute-force tìm 3 chữ số giữa
+            <br>2. Tool sẽ tự động:
+            <br>&nbsp;&nbsp;&nbsp;• Phase 1: Đăng nhập Garena → lấy 4 chữ số cuối
+            <br>&nbsp;&nbsp;&nbsp;• Phase 2: API napthe.vn → lấy 3 chữ số đầu
+            <br>&nbsp;&nbsp;&nbsp;• Phase 3: Vào recovery page → nhập username
+            <br>&nbsp;&nbsp;&nbsp;• Phase 4: Brute-force 3 chữ số giữa (000-999)
             <br>3. Kết quả: Số điện thoại đầy đủ (10 chữ số)
         </div>
 
@@ -374,6 +414,18 @@
                     required
                 ></textarea>
                 <div class="hint">Format: username:password (một account per dòng)</div>
+            </div>
+
+            <div class="form-group">
+                <label for="delay">⏱️ Delay Giữa Brute-Force Attempts (ms)</label>
+                <input 
+                    type="number" 
+                    id="delay" 
+                    value="2000"
+                    min="500"
+                    max="10000"
+                >
+                <div class="hint">Delay tối thiểu giữa mỗi lần thử (mặc định: 2000ms)</div>
             </div>
 
             <div class="button-group">
@@ -400,8 +452,8 @@
                         <div class="stat-label">Thất Bại ✗</div>
                     </div>
                     <div class="stat">
-                        <div class="stat-value" id="manualCount">0</div>
-                        <div class="stat-label">Manual ⚠️</div>
+                        <div class="stat-value" id="processingCount">0</div>
+                        <div class="stat-label">Đang Xử Lý ⏳</div>
                     </div>
                 </div>
             </div>
@@ -411,46 +463,69 @@
     </div>
 
     <script>
-        // Simulated backend API (In real scenario, replace with actual API)
+        // Simulated backend API
         class GarenaRecoveryAPI {
-            async checkAccount(username, password) {
-                // Simulate API call delay
-                await this.delay(2000 + Math.random() * 2000);
+            async phase1Login(username, password) {
+                // Simulate Garena login delay
+                await this.delay(1500 + Math.random() * 1000);
 
-                // Random success rates
-                const phase1Success = Math.random() > 0.15;
-                const phase2Success = Math.random() > 0.15;
-                const phase3Success = Math.random() > 0.25;
-
-                // Simulated responses
+                const success = Math.random() > 0.15;
                 const last4 = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-                const first3 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-                const middle3 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-
-                const results = {
-                    phase1: {
-                        login_status: phase1Success ? 'success' : 'failed',
-                        last_4_digits: phase1Success ? last4 : '',
-                        masked_phone: phase1Success ? `***${last4}` : '',
-                        error: phase1Success ? '' : 'Invalid credentials or login blocked'
-                    },
-                    phase2: {
-                        api_status: phase1Success && phase2Success ? 'success' : 'failed',
-                        first_3_digits: phase1Success && phase2Success ? first3 : '',
-                        error: phase1Success && phase2Success ? '' : 'API call failed or no data'
-                    },
-                    phase3: {
-                        recovery_status: phase1Success && phase2Success && phase3Success ? 'success' : 'failed',
-                        complete_phone: phase1Success && phase2Success && phase3Success ? `${first3}${middle3}${last4}` : '',
-                        attempts: phase1Success && phase2Success && phase3Success ? Math.floor(Math.random() * 1000) : 0,
-                        error: phase1Success && phase2Success && phase3Success ? '' : 'Brute-force failed or rate limited'
-                    }
-                };
 
                 return {
-                    username: username,
-                    status: phase1Success && phase2Success && phase3Success ? 'success' : phase1Success && phase2Success && !phase3Success ? 'failed' : 'failed',
-                    ...results
+                    login_status: success ? 'success' : 'failed',
+                    last_4_digits: success ? last4 : '',
+                    masked_phone: success ? `***${last4}` : '',
+                    error: success ? '' : 'Invalid credentials or login blocked'
+                };
+            }
+
+            async phase2API(username, password) {
+                // Simulate napthe.vn API call
+                await this.delay(1500 + Math.random() * 1000);
+
+                const success = Math.random() > 0.15;
+                const first3 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+
+                return {
+                    api_status: success ? 'success' : 'failed',
+                    first_3_digits: success ? first3 : '',
+                    error: success ? '' : 'API call failed or no data'
+                };
+            }
+
+            async phase3Recovery(username, first3, last4, delayMs) {
+                // Simulate recovery page navigation
+                await this.delay(1000);
+
+                // Simulate the correct middle 3 digits
+                const correctMiddle = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+                let attempts = 0;
+
+                // Brute-force 000-999
+                for (let middle = 0; middle < 1000; middle++) {
+                    attempts++;
+                    const middleStr = middle.toString().padStart(3, '0');
+                    const testPhone = `${first3}${middleStr}${last4}`;
+
+                    await this.delay(delayMs);
+
+                    // Simulate finding the correct number after random attempts
+                    if (middleStr === correctMiddle || Math.random() > 0.997) {
+                        return {
+                            recovery_status: 'success',
+                            complete_phone: testPhone,
+                            attempts: attempts,
+                            error: ''
+                        };
+                    }
+                }
+
+                return {
+                    recovery_status: 'failed',
+                    complete_phone: '',
+                    attempts: attempts,
+                    error: 'Rate limited or brute-force failed'
                 };
             }
 
@@ -470,10 +545,12 @@
         const results = document.getElementById('results');
         const resultsList = document.getElementById('resultsList');
         const errorMessage = document.getElementById('errorMessage');
+        const delayInput = document.getElementById('delay');
 
         // Clear form
         clearBtn.addEventListener('click', () => {
             form.reset();
+            delayInput.value = '2000';
             results.classList.remove('show');
             errorMessage.classList.remove('show');
             resultsList.innerHTML = '';
@@ -482,6 +559,7 @@
         // Check accounts
         checkBtn.addEventListener('click', async () => {
             const accountsText = document.getElementById('accounts').value.trim();
+            const delayMs = parseInt(delayInput.value) || 2000;
 
             // Validation
             if (!accountsText) {
@@ -515,56 +593,112 @@
             resultsList.innerHTML = '';
 
             const allResults = [];
+            const resultsMap = new Map();
+
+            // Initialize results
+            for (const account of accounts) {
+                const resultId = 'result_' + Math.random().toString(36);
+                resultsMap.set(account.username, {
+                    id: resultId,
+                    username: account.username,
+                    status: 'processing',
+                    phase1: { login_status: 'processing' },
+                    phase2: { api_status: 'processing' },
+                    phase3: { recovery_status: 'processing', attempts: 0 },
+                    phase4: { brute_status: 'processing', complete_phone: '', attempts: 0 }
+                });
+            }
+
+            // Display initial results
+            updateResultsDisplay(resultsMap);
+            results.classList.add('show');
 
             for (let i = 0; i < accounts.length; i++) {
                 const account = accounts[i];
                 loadingText.textContent = `Đang kiểm tra... (${i + 1}/${accounts.length}) - ${account.username}`;
 
+                const result = resultsMap.get(account.username);
+
                 try {
-                    const result = await api.checkAccount(
+                    // Phase 1: Garena Login
+                    loadingText.textContent = `Đang kiểm tra (${i + 1}/${accounts.length}) - ${account.username} [Phase 1/4]`;
+                    result.phase1 = await api.phase1Login(account.username, account.password);
+
+                    if (result.phase1.login_status !== 'success') {
+                        result.status = 'failed';
+                        updateResultsDisplay(resultsMap);
+                        continue;
+                    }
+
+                    // Phase 2: napthe.vn API
+                    loadingText.textContent = `Đang kiểm tra (${i + 1}/${accounts.length}) - ${account.username} [Phase 2/4]`;
+                    result.phase2 = await api.phase2API(account.username, account.password);
+
+                    if (result.phase2.api_status !== 'success') {
+                        result.status = 'failed';
+                        updateResultsDisplay(resultsMap);
+                        continue;
+                    }
+
+                    // Phase 3 & 4: Recovery & Brute-force
+                    loadingText.textContent = `Đang kiểm tra (${i + 1}/${accounts.length}) - ${account.username} [Phase 3-4/4: Brute-force]`;
+                    
+                    result.phase4 = await api.phase3Recovery(
                         account.username,
-                        account.password
+                        result.phase2.first_3_digits,
+                        result.phase1.last_4_digits,
+                        delayMs
                     );
-                    allResults.push(result);
+
+                    if (result.phase4.brute_status !== 'success' && result.phase4.complete_phone) {
+                        result.phase4.brute_status = 'success';
+                        result.status = 'success';
+                    } else if (result.phase4.complete_phone) {
+                        result.phase4.brute_status = 'success';
+                        result.status = 'success';
+                    } else {
+                        result.status = 'failed';
+                    }
+
+                    updateResultsDisplay(resultsMap);
+
                 } catch (error) {
-                    allResults.push({
-                        username: account.username,
-                        status: 'failed',
-                        phase1: { login_status: 'failed', error: error.message },
-                        phase2: { api_status: 'failed', error: error.message },
-                        phase3: { recovery_status: 'failed', error: error.message }
-                    });
+                    result.status = 'failed';
+                    result.phase1.error = error.message;
+                    updateResultsDisplay(resultsMap);
                 }
             }
 
-            // Display results
-            displayResults(allResults);
+            // Final results
+            updateResultsDisplay(resultsMap);
             loading.classList.remove('show');
-            results.classList.add('show');
             checkBtn.disabled = false;
         });
 
-        function displayResults(allResults) {
-            const success = allResults.filter(r => r.status === 'success').length;
-            const failed = allResults.filter(r => r.status === 'failed').length;
-            const manual = allResults.filter(r => r.status === 'manual_required').length;
+        function updateResultsDisplay(resultsMap) {
+            const results = Array.from(resultsMap.values());
+            const success = results.filter(r => r.status === 'success').length;
+            const failed = results.filter(r => r.status === 'failed').length;
+            const processing = results.filter(r => r.status === 'processing').length;
 
             document.getElementById('successCount').textContent = success;
             document.getElementById('failedCount').textContent = failed;
-            document.getElementById('manualCount').textContent = manual;
+            document.getElementById('processingCount').textContent = processing;
 
-            resultsList.innerHTML = allResults.map(result => {
-                const statusClass = result.status === 'success' ? 'success' : result.status === 'manual_required' ? 'manual' : 'failed';
-                const statusText = result.status === 'success' ? '✓ Thành Công' : result.status === 'manual_required' ? '⚠️ Cần Manual' : '✗ Thất Bại';
+            resultsList.innerHTML = results.map(result => {
+                const statusClass = result.status === 'success' ? 'success' : result.status === 'processing' ? 'processing' : 'failed';
+                const statusText = result.status === 'success' ? '✓ Thành Công' : result.status === 'processing' ? '⏳ Đang Xử Lý' : '✗ Thất Bại';
 
                 let phoneHtml = '';
-                if (result.phase3 && result.phase3.complete_phone) {
-                    phoneHtml = `<div class="result-phone">📱 ${result.phase3.complete_phone}</div>`;
+                if (result.phase4 && result.phase4.complete_phone) {
+                    phoneHtml = `<div class="result-phone">📱 ${result.phase4.complete_phone}</div>`;
                 }
 
-                const phase1Status = result.phase1 && result.phase1.login_status === 'success' ? 'success' : 'failed';
-                const phase2Status = result.phase2 && result.phase2.api_status === 'success' ? 'success' : 'failed';
-                const phase3Status = result.phase3 && result.phase3.recovery_status === 'success' ? 'success' : 'failed';
+                const phase1Status = result.phase1 && result.phase1.login_status === 'success' ? 'success' : result.phase1.login_status === 'processing' ? 'processing' : 'failed';
+                const phase2Status = result.phase2 && result.phase2.api_status === 'success' ? 'success' : result.phase2.api_status === 'processing' ? 'processing' : 'failed';
+                const phase4Status = result.phase4 && result.phase4.brute_status === 'success' ? 'success' : result.phase4.brute_status === 'processing' ? 'processing' : 'failed';
+
+                const progressPercent = (result.phase4 && result.phase4.attempts) ? Math.min((result.phase4.attempts / 1000) * 100, 100) : 0;
 
                 return `
                     <div class="result-item ${statusClass}">
@@ -575,6 +709,8 @@
                                 <span class="phase-badge ${phase1Status}">PHASE 1</span>
                                 ${result.phase1 && result.phase1.login_status === 'success' 
                                     ? `✓ Garena login thành công<br/>&nbsp;&nbsp;&nbsp;&nbsp;Last 4 digits: <strong>${result.phase1.last_4_digits}</strong>`
+                                    : result.phase1 && result.phase1.login_status === 'processing'
+                                    ? `⏳ Đang đăng nhập...`
                                     : `✗ ${result.phase1 ? result.phase1.error : 'Failed'}`
                                 }
                             </p>
@@ -582,15 +718,20 @@
                                 <span class="phase-badge ${phase2Status}">PHASE 2</span>
                                 ${result.phase2 && result.phase2.api_status === 'success' 
                                     ? `✓ napthe.vn API thành công<br/>&nbsp;&nbsp;&nbsp;&nbsp;First 3 digits: <strong>${result.phase2.first_3_digits}</strong>`
+                                    : result.phase2 && result.phase2.api_status === 'processing'
+                                    ? `⏳ Đang gọi API...`
                                     : `✗ ${result.phase2 ? result.phase2.error : 'Failed'}`
                                 }
                             </p>
                             <p>
-                                <span class="phase-badge ${phase3Status}">PHASE 3</span>
-                                ${result.phase3 && result.phase3.recovery_status === 'success' 
-                                    ? `✓ Brute-force thành công<br/>&nbsp;&nbsp;&nbsp;&nbsp;Attempts: <strong>${result.phase3.attempts}</strong>`
-                                    : `✗ ${result.phase3 ? result.phase3.error : 'Failed'}`
+                                <span class="phase-badge ${phase4Status}">PHASE 3-4</span>
+                                ${result.phase4 && result.phase4.brute_status === 'success' 
+                                    ? `✓ Brute-force thành công<br/>&nbsp;&nbsp;&nbsp;&nbsp;Attempts: <strong>${result.phase4.attempts}</strong>`
+                                    : result.phase4 && result.phase4.brute_status === 'processing'
+                                    ? `⏳ Đang brute-force...<br/>&nbsp;&nbsp;&nbsp;&nbsp;Attempt: <strong>${result.phase4.attempts}/1000</strong>`
+                                    : `✗ ${result.phase4 ? result.phase4.error : 'Failed'}`
                                 }
+                                ${progressPercent > 0 ? `<div class="progress-bar"><div class="progress-fill" style="width: ${progressPercent}%"></div></div>` : ''}
                             </p>
                         </div>
                         ${phoneHtml}
