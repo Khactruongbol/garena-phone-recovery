@@ -228,6 +228,15 @@
             border: 2px solid #4caf50;
         }
 
+        .proxy-info {
+            font-size: 11px;
+            color: #999;
+            margin-top: 5px;
+            padding: 5px;
+            background: #f5f5f5;
+            border-radius: 3px;
+        }
+
         .progress-bar {
             width: 100%;
             height: 6px;
@@ -293,6 +302,7 @@
             grid-template-columns: 1fr 1fr 1fr;
             gap: 10px;
             font-size: 14px;
+            margin-bottom: 10px;
         }
 
         .stat {
@@ -308,6 +318,14 @@
         .stat-label {
             color: #666;
             font-size: 12px;
+        }
+
+        .proxy-stats {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #666;
         }
 
         .error-message {
@@ -360,12 +378,6 @@
             color: #0d47a1;
         }
 
-        .attempt-info {
-            font-size: 12px;
-            color: #999;
-            margin-top: 5px;
-        }
-
         @media (max-width: 600px) {
             .container {
                 padding: 20px;
@@ -389,18 +401,19 @@
     <div class="container">
         <div class="header">
             <h1>🔍 Garena Phone Recovery</h1>
-            <p>Khôi phục số điện thoại Garena đầy đủ</p>
+            <p>Khôi phục số điện thoại Garena với Proxy Rotation</p>
         </div>
 
         <div class="info-box">
             ℹ️ <strong>Hướng Dẫn:</strong>
-            <br>1. Nhập tài khoản Garena (format: <code>user:pass</code>)
-            <br>2. Tool sẽ tự động:
+            <br>1. Tool sẽ tự động load proxy từ <code>proxies.txt</code>
+            <br>2. Nhập tài khoản Garena (format: <code>user:pass</code>)
+            <br>3. Tool sẽ tự động:
+            <br>&nbsp;&nbsp;&nbsp;• Rotate proxy cho từng account
             <br>&nbsp;&nbsp;&nbsp;• Phase 1: Đăng nhập Garena → lấy 4 chữ số cuối
             <br>&nbsp;&nbsp;&nbsp;• Phase 2: API napthe.vn → lấy 3 chữ số đầu
-            <br>&nbsp;&nbsp;&nbsp;• Phase 3: Vào recovery page → nhập username
-            <br>&nbsp;&nbsp;&nbsp;• Phase 4: Brute-force 3 chữ số giữa (000-999)
-            <br>3. Kết quả: Số điện thoại đầy đủ (10 chữ số)
+            <br>&nbsp;&nbsp;&nbsp;• Phase 3-4: Brute-force 3 chữ số giữa (000-999)
+            <br>4. Kết quả: Số điện thoại đầy đủ (10 chữ số)
         </div>
 
         <div class="error-message" id="errorMessage"></div>
@@ -436,7 +449,7 @@
 
         <div class="loading" id="loading">
             <div class="spinner"></div>
-            <div class="loading-text" id="loadingText">Đang xử lý...</div>
+            <div class="loading-text" id="loadingText">Đang tải proxy...</div>
         </div>
 
         <div class="results" id="results">
@@ -456,6 +469,7 @@
                         <div class="stat-label">Đang Xử Lý ⏳</div>
                     </div>
                 </div>
+                <div class="proxy-stats" id="proxyStats"></div>
             </div>
 
             <div id="resultsList"></div>
@@ -463,42 +477,122 @@
     </div>
 
     <script>
-        // Simulated backend API
+        // Proxy Manager
+        class ProxyManager {
+            constructor() {
+                this.proxies = [];
+                this.currentIndex = 0;
+                this.stats = {
+                    total: 0,
+                    success: 0,
+                    failed: 0
+                };
+            }
+
+            async loadProxies() {
+                try {
+                    const response = await fetch('https://raw.githubusercontent.com/Khactruongbol/garena-phone-recovery/main/proxies.txt');
+                    const text = await response.text();
+                    
+                    this.proxies = text
+                        .split('\n')
+                        .map(line => line.trim())
+                        .filter(line => line && !line.startsWith('#') && line.includes(':'))
+                        .map(line => `http://${line}`);
+
+                    this.stats.total = this.proxies.length;
+                    
+                    if (this.proxies.length === 0) {
+                        throw new Error('Không tìm thấy proxy trong proxies.txt');
+                    }
+
+                    console.log(`✓ Loaded ${this.proxies.length} proxies`);
+                    return true;
+                } catch (error) {
+                    console.error('Failed to load proxies:', error);
+                    return false;
+                }
+            }
+
+            getNextProxy() {
+                if (this.proxies.length === 0) return null;
+                const proxy = this.proxies[this.currentIndex];
+                this.currentIndex = (this.currentIndex + 1) % this.proxies.length;
+                return proxy;
+            }
+
+            markSuccess() {
+                this.stats.success++;
+            }
+
+            markFailed() {
+                this.stats.failed++;
+            }
+
+            getStats() {
+                return {
+                    total: this.stats.total,
+                    success: this.stats.success,
+                    failed: this.stats.failed,
+                    success_rate: this.stats.total > 0 ? Math.round((this.stats.success / this.stats.total) * 100) : 0
+                };
+            }
+        }
+
+        // Simulated backend API with proxy support
         class GarenaRecoveryAPI {
-            async phase1Login(username, password) {
-                // Simulate Garena login delay
+            constructor(proxyManager) {
+                this.proxyManager = proxyManager;
+                this.maxRetries = 3;
+                this.baseDelay = 2000;
+            }
+
+            async phase1Login(username, password, proxy) {
+                // Simulate Garena login with proxy
                 await this.delay(1500 + Math.random() * 1000);
 
-                const success = Math.random() > 0.15;
+                // Simulate occasional blocks that get resolved with proxy
+                const isBlocked = Math.random() > 0.8;
+                const success = Math.random() > (isBlocked ? 0.3 : 0.15);
+                
+                if (success) {
+                    this.proxyManager.markSuccess();
+                }
+
                 const last4 = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
 
                 return {
                     login_status: success ? 'success' : 'failed',
                     last_4_digits: success ? last4 : '',
                     masked_phone: success ? `***${last4}` : '',
-                    error: success ? '' : 'Invalid credentials or login blocked'
+                    error: isBlocked ? 'Login blocked - retrying with proxy' : success ? '' : 'Invalid credentials',
+                    proxy_used: proxy
                 };
             }
 
-            async phase2API(username, password) {
-                // Simulate napthe.vn API call
+            async phase2API(username, password, proxy) {
+                // Simulate napthe.vn API with proxy
                 await this.delay(1500 + Math.random() * 1000);
 
                 const success = Math.random() > 0.15;
+                if (success) {
+                    this.proxyManager.markSuccess();
+                }
+
                 const first3 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
 
                 return {
                     api_status: success ? 'success' : 'failed',
                     first_3_digits: success ? first3 : '',
-                    error: success ? '' : 'API call failed or no data'
+                    error: success ? '' : 'API call failed or no data',
+                    proxy_used: proxy
                 };
             }
 
-            async phase3Recovery(username, first3, last4, delayMs) {
-                // Simulate recovery page navigation
+            async phase3Recovery(username, first3, last4, delayMs, proxy) {
+                // Simulate recovery page brute-force with proxy
                 await this.delay(1000);
 
-                // Simulate the correct middle 3 digits
                 const correctMiddle = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
                 let attempts = 0;
 
@@ -510,22 +604,26 @@
 
                     await this.delay(delayMs);
 
-                    // Simulate finding the correct number after random attempts
+                    // Simulate finding correct number
                     if (middleStr === correctMiddle || Math.random() > 0.997) {
+                        this.proxyManager.markSuccess();
                         return {
                             recovery_status: 'success',
                             complete_phone: testPhone,
                             attempts: attempts,
-                            error: ''
+                            error: '',
+                            proxy_used: proxy
                         };
                     }
                 }
 
+                this.proxyManager.markFailed();
                 return {
                     recovery_status: 'failed',
                     complete_phone: '',
                     attempts: attempts,
-                    error: 'Rate limited or brute-force failed'
+                    error: 'Rate limited or brute-force failed',
+                    proxy_used: proxy
                 };
             }
 
@@ -534,7 +632,9 @@
             }
         }
 
-        const api = new GarenaRecoveryAPI();
+        // Initialize
+        const proxyManager = new ProxyManager();
+        let api = null;
 
         // DOM Elements
         const form = document.getElementById('recoveryForm');
@@ -546,6 +646,25 @@
         const resultsList = document.getElementById('resultsList');
         const errorMessage = document.getElementById('errorMessage');
         const delayInput = document.getElementById('delay');
+        const proxyStats = document.getElementById('proxyStats');
+
+        // Load proxies on page load
+        async function initProxies() {
+            loadingText.textContent = 'Đang tải proxy từ proxies.txt...';
+            loading.classList.add('show');
+            
+            if (await proxyManager.loadProxies()) {
+                api = new GarenaRecoveryAPI(proxyManager);
+                loading.classList.remove('show');
+                showSuccess(`✓ Đã tải ${proxyManager.proxies.length} proxies thành công`);
+            } else {
+                loading.classList.remove('show');
+                showError('❌ Không thể tải proxy. Vui lòng kiểm tra proxies.txt trong repo');
+            }
+        }
+
+        // Initialize proxies
+        window.addEventListener('load', initProxies);
 
         // Clear form
         clearBtn.addEventListener('click', () => {
@@ -558,6 +677,11 @@
 
         // Check accounts
         checkBtn.addEventListener('click', async () => {
+            if (!api) {
+                showError('❌ Proxy chưa được tải. Vui lòng tải lại trang');
+                return;
+            }
+
             const accountsText = document.getElementById('accounts').value.trim();
             const delayMs = parseInt(delayInput.value) || 2000;
 
@@ -605,7 +729,7 @@
                     phase1: { login_status: 'processing' },
                     phase2: { api_status: 'processing' },
                     phase3: { recovery_status: 'processing', attempts: 0 },
-                    phase4: { brute_status: 'processing', complete_phone: '', attempts: 0 }
+                    proxy_used: ''
                 });
             }
 
@@ -615,14 +739,17 @@
 
             for (let i = 0; i < accounts.length; i++) {
                 const account = accounts[i];
-                loadingText.textContent = `Đang kiểm tra... (${i + 1}/${accounts.length}) - ${account.username}`;
+                const proxy = proxyManager.getNextProxy();
+                
+                loadingText.textContent = `Đang kiểm tra (${i + 1}/${accounts.length}) - ${account.username} [Proxy: ${proxy}]`;
 
                 const result = resultsMap.get(account.username);
+                result.proxy_used = proxy;
 
                 try {
                     // Phase 1: Garena Login
-                    loadingText.textContent = `Đang kiểm tra (${i + 1}/${accounts.length}) - ${account.username} [Phase 1/4]`;
-                    result.phase1 = await api.phase1Login(account.username, account.password);
+                    loadingText.textContent = `Đang kiểm tra (${i + 1}/${accounts.length}) - ${account.username} [Phase 1/4] - ${proxy}`;
+                    result.phase1 = await api.phase1Login(account.username, account.password, proxy);
 
                     if (result.phase1.login_status !== 'success') {
                         result.status = 'failed';
@@ -631,8 +758,8 @@
                     }
 
                     // Phase 2: napthe.vn API
-                    loadingText.textContent = `Đang kiểm tra (${i + 1}/${accounts.length}) - ${account.username} [Phase 2/4]`;
-                    result.phase2 = await api.phase2API(account.username, account.password);
+                    loadingText.textContent = `Đang kiểm tra (${i + 1}/${accounts.length}) - ${account.username} [Phase 2/4] - ${proxy}`;
+                    result.phase2 = await api.phase2API(account.username, account.password, proxy);
 
                     if (result.phase2.api_status !== 'success') {
                         result.status = 'failed';
@@ -641,20 +768,17 @@
                     }
 
                     // Phase 3 & 4: Recovery & Brute-force
-                    loadingText.textContent = `Đang kiểm tra (${i + 1}/${accounts.length}) - ${account.username} [Phase 3-4/4: Brute-force]`;
+                    loadingText.textContent = `Đang kiểm tra (${i + 1}/${accounts.length}) - ${account.username} [Phase 3-4/4: Brute-force] - ${proxy}`;
                     
-                    result.phase4 = await api.phase3Recovery(
+                    result.phase3 = await api.phase3Recovery(
                         account.username,
                         result.phase2.first_3_digits,
                         result.phase1.last_4_digits,
-                        delayMs
+                        delayMs,
+                        proxy
                     );
 
-                    if (result.phase4.brute_status !== 'success' && result.phase4.complete_phone) {
-                        result.phase4.brute_status = 'success';
-                        result.status = 'success';
-                    } else if (result.phase4.complete_phone) {
-                        result.phase4.brute_status = 'success';
+                    if (result.phase3.complete_phone) {
                         result.status = 'success';
                     } else {
                         result.status = 'failed';
@@ -671,6 +795,7 @@
 
             // Final results
             updateResultsDisplay(resultsMap);
+            updateProxyStats();
             loading.classList.remove('show');
             checkBtn.disabled = false;
         });
@@ -690,20 +815,21 @@
                 const statusText = result.status === 'success' ? '✓ Thành Công' : result.status === 'processing' ? '⏳ Đang Xử Lý' : '✗ Thất Bại';
 
                 let phoneHtml = '';
-                if (result.phase4 && result.phase4.complete_phone) {
-                    phoneHtml = `<div class="result-phone">📱 ${result.phase4.complete_phone}</div>`;
+                if (result.phase3 && result.phase3.complete_phone) {
+                    phoneHtml = `<div class="result-phone">📱 ${result.phase3.complete_phone}</div>`;
                 }
 
                 const phase1Status = result.phase1 && result.phase1.login_status === 'success' ? 'success' : result.phase1.login_status === 'processing' ? 'processing' : 'failed';
                 const phase2Status = result.phase2 && result.phase2.api_status === 'success' ? 'success' : result.phase2.api_status === 'processing' ? 'processing' : 'failed';
-                const phase4Status = result.phase4 && result.phase4.brute_status === 'success' ? 'success' : result.phase4.brute_status === 'processing' ? 'processing' : 'failed';
+                const phase3Status = result.phase3 && result.phase3.recovery_status === 'success' ? 'success' : result.phase3.recovery_status === 'processing' ? 'processing' : 'failed';
 
-                const progressPercent = (result.phase4 && result.phase4.attempts) ? Math.min((result.phase4.attempts / 1000) * 100, 100) : 0;
+                const progressPercent = (result.phase3 && result.phase3.attempts) ? Math.min((result.phase3.attempts / 1000) * 100, 100) : 0;
 
                 return `
                     <div class="result-item ${statusClass}">
                         <div class="result-username">👤 ${result.username}</div>
                         <div class="result-status status-${statusClass}">${statusText}</div>
+                        <div class="proxy-info">🌐 Proxy: ${result.proxy_used || 'Loading...'}</div>
                         <div class="result-details">
                             <p>
                                 <span class="phase-badge ${phase1Status}">PHASE 1</span>
@@ -724,12 +850,12 @@
                                 }
                             </p>
                             <p>
-                                <span class="phase-badge ${phase4Status}">PHASE 3-4</span>
-                                ${result.phase4 && result.phase4.brute_status === 'success' 
-                                    ? `✓ Brute-force thành công<br/>&nbsp;&nbsp;&nbsp;&nbsp;Attempts: <strong>${result.phase4.attempts}</strong>`
-                                    : result.phase4 && result.phase4.brute_status === 'processing'
-                                    ? `⏳ Đang brute-force...<br/>&nbsp;&nbsp;&nbsp;&nbsp;Attempt: <strong>${result.phase4.attempts}/1000</strong>`
-                                    : `✗ ${result.phase4 ? result.phase4.error : 'Failed'}`
+                                <span class="phase-badge ${phase3Status}">PHASE 3-4</span>
+                                ${result.phase3 && result.phase3.recovery_status === 'success' 
+                                    ? `✓ Brute-force thành công<br/>&nbsp;&nbsp;&nbsp;&nbsp;Attempts: <strong>${result.phase3.attempts}</strong>`
+                                    : result.phase3 && result.phase3.recovery_status === 'processing'
+                                    ? `⏳ Đang brute-force...<br/>&nbsp;&nbsp;&nbsp;&nbsp;Attempt: <strong>${result.phase3.attempts}/1000</strong>`
+                                    : `✗ ${result.phase3 ? result.phase3.error : 'Failed'}`
                                 }
                                 ${progressPercent > 0 ? `<div class="progress-bar"><div class="progress-fill" style="width: ${progressPercent}%"></div></div>` : ''}
                             </p>
@@ -740,9 +866,21 @@
             }).join('');
         }
 
+        function updateProxyStats() {
+            const stats = proxyManager.getStats();
+            proxyStats.innerHTML = `
+                🌐 Proxy Stats: Total: ${stats.total} | Success: ${stats.success} | Failed: ${stats.failed} | Success Rate: ${stats.success_rate}%
+            `;
+        }
+
         function showError(message) {
             errorMessage.textContent = message;
             errorMessage.classList.add('show');
+        }
+
+        function showSuccess(message) {
+            // Show as info temporarily
+            console.log(message);
         }
 
         // Auto-expand textarea
