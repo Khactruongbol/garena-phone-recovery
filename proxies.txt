@@ -1,14 +1,14 @@
-# Garena Phone Recovery Tool - Proxy List
-# Format: http://host:port or socks5://host:port or just host:port
+# Garena Phone Recovery Tool - Rotating Proxy List
+# Format: host:port (auto-convert to http://host:port)
 # Lines starting with # are comments
 
-http://160.250.166.25:10298
-http://160.250.166.16:10723
-http://160.250.166.28:10575
-http://160.250.166.29:10326
-http://160.250.166.36:10247
-http://160.250.166.19:10081
-http://160.250.166.14:10081
-http://160.250.166.38:10733
-http://160.250.166.38:10424
-http://160.250.166.36:10776
+160.250.166.25:10298
+160.250.166.16:10723
+160.250.166.28:10575
+160.250.166.29:10326
+160.250.166.36:10247
+160.250.166.19:10081
+160.250.166.14:10081
+160.250.166.38:10733
+160.250.166.38:10424
+160.250.166.36:10776
