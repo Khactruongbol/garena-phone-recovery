@@ -149,20 +149,24 @@
 
         .result-item.success {
             border-left-color: #4caf50;
+            background: #f1f8f4;
         }
 
         .result-item.failed {
             border-left-color: #f44336;
+            background: #fef5f5;
         }
 
         .result-item.manual {
             border-left-color: #ff9800;
+            background: #fff8f3;
         }
 
         .result-username {
             font-weight: 600;
             color: #333;
             margin-bottom: 8px;
+            font-size: 15px;
         }
 
         .result-status {
@@ -171,6 +175,7 @@
             border-radius: 3px;
             display: inline-block;
             margin-bottom: 10px;
+            font-weight: 600;
         }
 
         .status-success {
@@ -191,20 +196,24 @@
         .result-details {
             font-size: 13px;
             color: #666;
-            line-height: 1.6;
+            line-height: 1.8;
+        }
+
+        .result-details p {
+            margin-bottom: 5px;
         }
 
         .result-phone {
             background: #fff;
-            padding: 10px;
+            padding: 12px;
             border-radius: 4px;
             margin: 10px 0;
             font-family: monospace;
-            font-size: 16px;
+            font-size: 18px;
             font-weight: bold;
-            color: #667eea;
+            color: #4caf50;
             text-align: center;
-            border: 2px dashed #667eea;
+            border: 2px solid #4caf50;
         }
 
         .loading {
@@ -242,7 +251,7 @@
             border-left: 4px solid #2196f3;
             padding: 15px;
             border-radius: 4px;
-            margin-top: 20px;
+            margin-bottom: 20px;
         }
 
         .summary-title {
@@ -298,6 +307,26 @@
             line-height: 1.6;
         }
 
+        .phase-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            background: #e0e0e0;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-right: 5px;
+        }
+
+        .phase-badge.success {
+            background: #c8e6c9;
+            color: #1b5e20;
+        }
+
+        .phase-badge.failed {
+            background: #ffcdd2;
+            color: #b71c1c;
+        }
+
         @media (max-width: 600px) {
             .container {
                 padding: 20px;
@@ -321,46 +350,27 @@
     <div class="container">
         <div class="header">
             <h1>🔍 Garena Phone Recovery</h1>
-            <p>Kiểm tra và khôi phục số điện thoại Garena</p>
+            <p>Khôi phục số điện thoại Garena đầy đủ</p>
         </div>
 
         <div class="info-box">
-            ℹ️ Nhập tài khoản Garena dưới đây. Tool sẽ kiểm tra số điện thoại thông qua 3 phase:
-            <br>• Phase 1: Đăng nhập Garena → Lấy 4 chữ số cuối
-            <br>• Phase 2: API napthe.vn → Lấy 3 chữ số đầu
-            <br>• Phase 3: Brute-force → Tìm 3 chữ số giữa
+            ℹ️ <strong>Hướng Dẫn:</strong>
+            <br>1. Nhập tài khoản Garena (format: <code>user:pass</code>)
+            <br>2. Tài khoản này sẽ được dùng để:
+            <br>&nbsp;&nbsp;&nbsp;• Đăng nhập Garena lấy 4 chữ số cuối
+            <br>&nbsp;&nbsp;&nbsp;• Đăng nhập napthe.vn lấy 3 chữ số đầu
+            <br>&nbsp;&nbsp;&nbsp;• Brute-force tìm 3 chữ số giữa
+            <br>3. Kết quả: Số điện thoại đầy đủ (10 chữ số)
         </div>
 
         <div class="error-message" id="errorMessage"></div>
 
         <form id="recoveryForm">
             <div class="form-group">
-                <label for="naptheUser">👤 Tài Khoản napthe.vn</label>
-                <input 
-                    type="text" 
-                    id="naptheUser" 
-                    placeholder="username hoặc email"
-                    required
-                >
-                <div class="hint">Tài khoản napthe.vn của bạn</div>
-            </div>
-
-            <div class="form-group">
-                <label for="napthePass">🔑 Mật Khẩu napthe.vn</label>
-                <input 
-                    type="password" 
-                    id="napthePass" 
-                    placeholder="••••••••"
-                    required
-                >
-                <div class="hint">Mật khẩu napthe.vn</div>
-            </div>
-
-            <div class="form-group">
-                <label for="accounts">📋 Tài Khoản Garena (Mỗi Dòng Một Tài Khoản)</label>
+                <label for="accounts">📋 Tài Khoản Garena (Mỗi Dòng Một)</label>
                 <textarea 
                     id="accounts" 
-                    placeholder="username1:password1&#10;username2:password2&#10;username3:password3"
+                    placeholder="user1:password1&#10;user2:password2&#10;user3:password3"
                     required
                 ></textarea>
                 <div class="hint">Format: username:password (một account per dòng)</div>
@@ -403,34 +413,43 @@
     <script>
         // Simulated backend API (In real scenario, replace with actual API)
         class GarenaRecoveryAPI {
-            async checkAccount(username, password, naptheUser, napthePass) {
+            async checkAccount(username, password) {
                 // Simulate API call delay
                 await this.delay(2000 + Math.random() * 2000);
 
-                // Simulated responses (replace with actual API calls)
+                // Random success rates
+                const phase1Success = Math.random() > 0.15;
+                const phase2Success = Math.random() > 0.15;
+                const phase3Success = Math.random() > 0.25;
+
+                // Simulated responses
+                const last4 = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+                const first3 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+                const middle3 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+
                 const results = {
                     phase1: {
-                        login_status: Math.random() > 0.2 ? 'success' : 'failed',
-                        last_4_digits: Math.random() > 0.2 ? Math.floor(Math.random() * 10000).toString().padStart(4, '0') : '',
-                        masked_phone: Math.random() > 0.2 ? `***${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}` : '',
-                        error: Math.random() > 0.2 ? '' : 'Invalid credentials'
+                        login_status: phase1Success ? 'success' : 'failed',
+                        last_4_digits: phase1Success ? last4 : '',
+                        masked_phone: phase1Success ? `***${last4}` : '',
+                        error: phase1Success ? '' : 'Invalid credentials or login blocked'
                     },
                     phase2: {
-                        api_status: Math.random() > 0.15 ? 'success' : 'failed',
-                        first_3_digits: Math.random() > 0.15 ? Math.floor(Math.random() * 1000).toString().padStart(3, '0') : '',
-                        error: Math.random() > 0.15 ? '' : 'API error'
+                        api_status: phase1Success && phase2Success ? 'success' : 'failed',
+                        first_3_digits: phase1Success && phase2Success ? first3 : '',
+                        error: phase1Success && phase2Success ? '' : 'API call failed or no data'
                     },
                     phase3: {
-                        recovery_status: Math.random() > 0.3 ? 'success' : 'failed',
-                        complete_phone: Math.random() > 0.3 ? `${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}` : '',
-                        attempts: Math.floor(Math.random() * 1000),
-                        error: Math.random() > 0.3 ? '' : 'Rate limited'
+                        recovery_status: phase1Success && phase2Success && phase3Success ? 'success' : 'failed',
+                        complete_phone: phase1Success && phase2Success && phase3Success ? `${first3}${middle3}${last4}` : '',
+                        attempts: phase1Success && phase2Success && phase3Success ? Math.floor(Math.random() * 1000) : 0,
+                        error: phase1Success && phase2Success && phase3Success ? '' : 'Brute-force failed or rate limited'
                     }
                 };
 
                 return {
                     username: username,
-                    status: results.phase1.login_status === 'success' && results.phase2.api_status === 'success' && results.phase3.recovery_status === 'success' ? 'success' : 'failed',
+                    status: phase1Success && phase2Success && phase3Success ? 'success' : phase1Success && phase2Success && !phase3Success ? 'failed' : 'failed',
                     ...results
                 };
             }
@@ -462,16 +481,9 @@
 
         // Check accounts
         checkBtn.addEventListener('click', async () => {
-            const naptheUser = document.getElementById('naptheUser').value.trim();
-            const napthePass = document.getElementById('napthePass').value.trim();
             const accountsText = document.getElementById('accounts').value.trim();
 
             // Validation
-            if (!naptheUser || !napthePass) {
-                showError('❌ Vui lòng nhập tài khoản và mật khẩu napthe.vn');
-                return;
-            }
-
             if (!accountsText) {
                 showError('❌ Vui lòng nhập ít nhất một tài khoản Garena');
                 return;
@@ -483,8 +495,11 @@
                 .map(line => line.trim())
                 .filter(line => line && line.includes(':'))
                 .map(line => {
-                    const [username, password] = line.split(':');
-                    return { username: username.trim(), password: password.trim() };
+                    const parts = line.split(':');
+                    return { 
+                        username: parts[0].trim(), 
+                        password: parts.slice(1).join(':').trim() 
+                    };
                 });
 
             if (accounts.length === 0) {
@@ -508,9 +523,7 @@
                 try {
                     const result = await api.checkAccount(
                         account.username,
-                        account.password,
-                        naptheUser,
-                        napthePass
+                        account.password
                     );
                     allResults.push(result);
                 } catch (error) {
@@ -545,18 +558,40 @@
                 const statusText = result.status === 'success' ? '✓ Thành Công' : result.status === 'manual_required' ? '⚠️ Cần Manual' : '✗ Thất Bại';
 
                 let phoneHtml = '';
-                if (result.phase3.complete_phone) {
+                if (result.phase3 && result.phase3.complete_phone) {
                     phoneHtml = `<div class="result-phone">📱 ${result.phase3.complete_phone}</div>`;
                 }
+
+                const phase1Status = result.phase1 && result.phase1.login_status === 'success' ? 'success' : 'failed';
+                const phase2Status = result.phase2 && result.phase2.api_status === 'success' ? 'success' : 'failed';
+                const phase3Status = result.phase3 && result.phase3.recovery_status === 'success' ? 'success' : 'failed';
 
                 return `
                     <div class="result-item ${statusClass}">
                         <div class="result-username">👤 ${result.username}</div>
                         <div class="result-status status-${statusClass}">${statusText}</div>
                         <div class="result-details">
-                            <p><strong>Phase 1:</strong> ${result.phase1.login_status === 'success' ? `✓ Đăng nhập thành công - Last 4: ${result.phase1.last_4_digits}` : '✗ ' + (result.phase1.error || 'Failed')}</p>
-                            <p><strong>Phase 2:</strong> ${result.phase2.api_status === 'success' ? `✓ API thành công - First 3: ${result.phase2.first_3_digits}` : '✗ ' + (result.phase2.error || 'Failed')}</p>
-                            <p><strong>Phase 3:</strong> ${result.phase3.recovery_status === 'success' ? `✓ Tìm thấy sau ${result.phase3.attempts} lần thử` : '✗ ' + (result.phase3.error || 'Failed')}</p>
+                            <p>
+                                <span class="phase-badge ${phase1Status}">PHASE 1</span>
+                                ${result.phase1 && result.phase1.login_status === 'success' 
+                                    ? `✓ Garena login thành công<br/>&nbsp;&nbsp;&nbsp;&nbsp;Last 4 digits: <strong>${result.phase1.last_4_digits}</strong>`
+                                    : `✗ ${result.phase1 ? result.phase1.error : 'Failed'}`
+                                }
+                            </p>
+                            <p>
+                                <span class="phase-badge ${phase2Status}">PHASE 2</span>
+                                ${result.phase2 && result.phase2.api_status === 'success' 
+                                    ? `✓ napthe.vn API thành công<br/>&nbsp;&nbsp;&nbsp;&nbsp;First 3 digits: <strong>${result.phase2.first_3_digits}</strong>`
+                                    : `✗ ${result.phase2 ? result.phase2.error : 'Failed'}`
+                                }
+                            </p>
+                            <p>
+                                <span class="phase-badge ${phase3Status}">PHASE 3</span>
+                                ${result.phase3 && result.phase3.recovery_status === 'success' 
+                                    ? `✓ Brute-force thành công<br/>&nbsp;&nbsp;&nbsp;&nbsp;Attempts: <strong>${result.phase3.attempts}</strong>`
+                                    : `✗ ${result.phase3 ? result.phase3.error : 'Failed'}`
+                                }
+                            </p>
                         </div>
                         ${phoneHtml}
                     </div>
