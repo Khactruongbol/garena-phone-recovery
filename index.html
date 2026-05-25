@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Garena Phone Recovery Tool</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        input[type="text"],
+        input[type="password"],
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        input[type="password"]:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+            font-family: monospace;
+        }
+
+        .hint {
+            font-size: 12px;
+            color: #999;
+            margin-top: 5px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 30px;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-check {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-check:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-check:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-clear {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .btn-clear:hover {
+            background: #e0e0e0;
+        }
+
+        .results {
+            margin-top: 30px;
+            display: none;
+        }
+
+        .results.show {
+            display: block;
+        }
+
+        .result-item {
+            background: #f9f9f9;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+        }
+
+        .result-item.success {
+            border-left-color: #4caf50;
+        }
+
+        .result-item.failed {
+            border-left-color: #f44336;
+        }
+
+        .result-item.manual {
+            border-left-color: #ff9800;
+        }
+
+        .result-username {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .result-status {
+            font-size: 12px;
+            padding: 4px 8px;
+            border-radius: 3px;
+            display: inline-block;
+            margin-bottom: 10px;
+        }
+
+        .status-success {
+            background: #4caf50;
+            color: white;
+        }
+
+        .status-failed {
+            background: #f44336;
+            color: white;
+        }
+
+        .status-manual {
+            background: #ff9800;
+            color: white;
+        }
+
+        .result-details {
+            font-size: 13px;
+            color: #666;
+            line-height: 1.6;
+        }
+
+        .result-phone {
+            background: #fff;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 16px;
+            font-weight: bold;
+            color: #667eea;
+            text-align: center;
+            border: 2px dashed #667eea;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .summary {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 20px;
+        }
+
+        .summary-title {
+            font-weight: 600;
+            color: #1976d2;
+            margin-bottom: 10px;
+        }
+
+        .summary-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+            font-size: 14px;
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-weight: bold;
+            font-size: 18px;
+            color: #1976d2;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 12px;
+        }
+
+        .error-message {
+            background: #ffebee;
+            border-left: 4px solid #f44336;
+            color: #c62828;
+            padding: 12px;
+            border-radius: 4px;
+            margin: 15px 0;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        .info-box {
+            background: #f0f4ff;
+            border-left: 4px solid #667eea;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #555;
+            line-height: 1.6;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 20px;
+            }
+
+            .header h1 {
+                font-size: 22px;
+            }
+
+            .button-group {
+                flex-direction: column;
+            }
+
+            .summary-stats {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Garena Phone Recovery</h1>
+            <p>Kiểm tra và khôi phục số điện thoại Garena</p>
+        </div>
+
+        <div class="info-box">
+            ℹ️ Nhập tài khoản Garena dưới đây. Tool sẽ kiểm tra số điện thoại thông qua 3 phase:
+            <br>• Phase 1: Đăng nhập Garena → Lấy 4 chữ số cuối
+            <br>• Phase 2: API napthe.vn → Lấy 3 chữ số đầu
+            <br>• Phase 3: Brute-force → Tìm 3 chữ số giữa
+        </div>
+
+        <div class="error-message" id="errorMessage"></div>
+
+        <form id="recoveryForm">
+            <div class="form-group">
+                <label for="naptheUser">👤 Tài Khoản napthe.vn</label>
+                <input 
+                    type="text" 
+                    id="naptheUser" 
+                    placeholder="username hoặc email"
+                    required
+                >
+                <div class="hint">Tài khoản napthe.vn của bạn</div>
+            </div>
+
+            <div class="form-group">
+                <label for="napthePass">🔑 Mật Khẩu napthe.vn</label>
+                <input 
+                    type="password" 
+                    id="napthePass" 
+                    placeholder="••••••••"
+                    required
+                >
+                <div class="hint">Mật khẩu napthe.vn</div>
+            </div>
+
+            <div class="form-group">
+                <label for="accounts">📋 Tài Khoản Garena (Mỗi Dòng Một Tài Khoản)</label>
+                <textarea 
+                    id="accounts" 
+                    placeholder="username1:password1&#10;username2:password2&#10;username3:password3"
+                    required
+                ></textarea>
+                <div class="hint">Format: username:password (một account per dòng)</div>
+            </div>
+
+            <div class="button-group">
+                <button type="button" class="btn-check" id="checkBtn">▶️ Kiểm Tra Ngay</button>
+                <button type="button" class="btn-clear" id="clearBtn">🗑️ Xóa</button>
+            </div>
+        </form>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <div class="loading-text" id="loadingText">Đang xử lý...</div>
+        </div>
+
+        <div class="results" id="results">
+            <div class="summary">
+                <div class="summary-title">📊 Kết Quả Tổng Hợp</div>
+                <div class="summary-stats">
+                    <div class="stat">
+                        <div class="stat-value" id="successCount">0</div>
+                        <div class="stat-label">Thành Công ✓</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="failedCount">0</div>
+                        <div class="stat-label">Thất Bại ✗</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="manualCount">0</div>
+                        <div class="stat-label">Manual ⚠️</div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="resultsList"></div>
+        </div>
+    </div>
+
+    <script>
+        // Simulated backend API (In real scenario, replace with actual API)
+        class GarenaRecoveryAPI {
+            async checkAccount(username, password, naptheUser, napthePass) {
+                // Simulate API call delay
+                await this.delay(2000 + Math.random() * 2000);
+
+                // Simulated responses (replace with actual API calls)
+                const results = {
+                    phase1: {
+                        login_status: Math.random() > 0.2 ? 'success' : 'failed',
+                        last_4_digits: Math.random() > 0.2 ? Math.floor(Math.random() * 10000).toString().padStart(4, '0') : '',
+                        masked_phone: Math.random() > 0.2 ? `***${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}` : '',
+                        error: Math.random() > 0.2 ? '' : 'Invalid credentials'
+                    },
+                    phase2: {
+                        api_status: Math.random() > 0.15 ? 'success' : 'failed',
+                        first_3_digits: Math.random() > 0.15 ? Math.floor(Math.random() * 1000).toString().padStart(3, '0') : '',
+                        error: Math.random() > 0.15 ? '' : 'API error'
+                    },
+                    phase3: {
+                        recovery_status: Math.random() > 0.3 ? 'success' : 'failed',
+                        complete_phone: Math.random() > 0.3 ? `${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}` : '',
+                        attempts: Math.floor(Math.random() * 1000),
+                        error: Math.random() > 0.3 ? '' : 'Rate limited'
+                    }
+                };
+
+                return {
+                    username: username,
+                    status: results.phase1.login_status === 'success' && results.phase2.api_status === 'success' && results.phase3.recovery_status === 'success' ? 'success' : 'failed',
+                    ...results
+                };
+            }
+
+            delay(ms) {
+                return new Promise(resolve => setTimeout(resolve, ms));
+            }
+        }
+
+        const api = new GarenaRecoveryAPI();
+
+        // DOM Elements
+        const form = document.getElementById('recoveryForm');
+        const checkBtn = document.getElementById('checkBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const loading = document.getElementById('loading');
+        const loadingText = document.getElementById('loadingText');
+        const results = document.getElementById('results');
+        const resultsList = document.getElementById('resultsList');
+        const errorMessage = document.getElementById('errorMessage');
+
+        // Clear form
+        clearBtn.addEventListener('click', () => {
+            form.reset();
+            results.classList.remove('show');
+            errorMessage.classList.remove('show');
+            resultsList.innerHTML = '';
+        });
+
+        // Check accounts
+        checkBtn.addEventListener('click', async () => {
+            const naptheUser = document.getElementById('naptheUser').value.trim();
+            const napthePass = document.getElementById('napthePass').value.trim();
+            const accountsText = document.getElementById('accounts').value.trim();
+
+            // Validation
+            if (!naptheUser || !napthePass) {
+                showError('❌ Vui lòng nhập tài khoản và mật khẩu napthe.vn');
+                return;
+            }
+
+            if (!accountsText) {
+                showError('❌ Vui lòng nhập ít nhất một tài khoản Garena');
+                return;
+            }
+
+            // Parse accounts
+            const accounts = accountsText
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line && line.includes(':'))
+                .map(line => {
+                    const [username, password] = line.split(':');
+                    return { username: username.trim(), password: password.trim() };
+                });
+
+            if (accounts.length === 0) {
+                showError('❌ Format không hợp lệ. Sử dụng: username:password');
+                return;
+            }
+
+            // Start checking
+            checkBtn.disabled = true;
+            errorMessage.classList.remove('show');
+            loading.classList.add('show');
+            results.classList.remove('show');
+            resultsList.innerHTML = '';
+
+            const allResults = [];
+
+            for (let i = 0; i < accounts.length; i++) {
+                const account = accounts[i];
+                loadingText.textContent = `Đang kiểm tra... (${i + 1}/${accounts.length}) - ${account.username}`;
+
+                try {
+                    const result = await api.checkAccount(
+                        account.username,
+                        account.password,
+                        naptheUser,
+                        napthePass
+                    );
+                    allResults.push(result);
+                } catch (error) {
+                    allResults.push({
+                        username: account.username,
+                        status: 'failed',
+                        phase1: { login_status: 'failed', error: error.message },
+                        phase2: { api_status: 'failed', error: error.message },
+                        phase3: { recovery_status: 'failed', error: error.message }
+                    });
+                }
+            }
+
+            // Display results
+            displayResults(allResults);
+            loading.classList.remove('show');
+            results.classList.add('show');
+            checkBtn.disabled = false;
+        });
+
+        function displayResults(allResults) {
+            const success = allResults.filter(r => r.status === 'success').length;
+            const failed = allResults.filter(r => r.status === 'failed').length;
+            const manual = allResults.filter(r => r.status === 'manual_required').length;
+
+            document.getElementById('successCount').textContent = success;
+            document.getElementById('failedCount').textContent = failed;
+            document.getElementById('manualCount').textContent = manual;
+
+            resultsList.innerHTML = allResults.map(result => {
+                const statusClass = result.status === 'success' ? 'success' : result.status === 'manual_required' ? 'manual' : 'failed';
+                const statusText = result.status === 'success' ? '✓ Thành Công' : result.status === 'manual_required' ? '⚠️ Cần Manual' : '✗ Thất Bại';
+
+                let phoneHtml = '';
+                if (result.phase3.complete_phone) {
+                    phoneHtml = `<div class="result-phone">📱 ${result.phase3.complete_phone}</div>`;
+                }
+
+                return `
+                    <div class="result-item ${statusClass}">
+                        <div class="result-username">👤 ${result.username}</div>
+                        <div class="result-status status-${statusClass}">${statusText}</div>
+                        <div class="result-details">
+                            <p><strong>Phase 1:</strong> ${result.phase1.login_status === 'success' ? `✓ Đăng nhập thành công - Last 4: ${result.phase1.last_4_digits}` : '✗ ' + (result.phase1.error || 'Failed')}</p>
+                            <p><strong>Phase 2:</strong> ${result.phase2.api_status === 'success' ? `✓ API thành công - First 3: ${result.phase2.first_3_digits}` : '✗ ' + (result.phase2.error || 'Failed')}</p>
+                            <p><strong>Phase 3:</strong> ${result.phase3.recovery_status === 'success' ? `✓ Tìm thấy sau ${result.phase3.attempts} lần thử` : '✗ ' + (result.phase3.error || 'Failed')}</p>
+                        </div>
+                        ${phoneHtml}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.classList.add('show');
+        }
+
+        // Auto-expand textarea
+        const textarea = document.getElementById('accounts');
+        textarea.addEventListener('input', () => {
+            textarea.style.height = 'auto';
+            textarea.style.height = (textarea.scrollHeight) + 'px';
+        });
+    </script>
+</body>
+</html>
