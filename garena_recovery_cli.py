@@ -3,7 +3,7 @@
 Garena Phone Recovery Tool v4 - Interactive CLI
 - Single account input for both Garena and napthe.vn
 - Interactive prompt for account input
-- Proxy rotation from proxies.txt
+- Auto-load proxies from proxies.txt
 """
 
 import argparse
@@ -148,17 +148,29 @@ class ProxyRotator:
 # UTILITY FUNCTIONS
 # ============================================================================
 
-async def read_proxy_file(path: str) -> List[str]:
+async def read_proxy_file(path: str = "proxies.txt") -> List[str]:
     """Read proxies from file"""
     proxies = []
+    file_path = Path(path)
+    
+    if not file_path.exists():
+        print(f"[WARN] Proxy file not found: {path}")
+        return proxies
+    
     try:
         async with aiofiles.open(path, "r", encoding="utf-8", errors="ignore") as f:
             async for line in f:
                 line = line.strip()
                 if line and not line.startswith("#"):
                     proxies.append(line)
-    except FileNotFoundError:
-        print(f"[WARN] Proxy file not found: {path}")
+        print(f"[OK] Loaded proxies.txt ({len(proxies)} proxies)")
+        for proxy in proxies[:3]:
+            print(f"     - {proxy}")
+        if len(proxies) > 3:
+            print(f"     ... and {len(proxies) - 3} more")
+    except Exception as e:
+        print(f"[ERR] Failed to read proxies.txt: {str(e)[:100]}")
+    
     return proxies
 
 
@@ -735,13 +747,28 @@ async def main():
         description="Garena Phone Recovery Tool v4 - Extract complete 10-digit phone number"
     )
     parser.add_argument("-o", "--output", default="garena_recovery_result", help="Output prefix")
-    parser.add_argument("--proxy-list", default="proxies.txt", help="Proxy list file (host:port format)")
+    parser.add_argument("--proxy-list", default="proxies.txt", help="Proxy list file (auto-detected)")
     parser.add_argument("--delay", type=float, default=30.0, help="Delay between accounts (seconds)")
     parser.add_argument("--phase-delay", type=float, default=5.0, help="Delay between phases (seconds)")
     parser.add_argument("--phase3-delay", type=float, default=2.0, help="Delay between recovery attempts (seconds)")
     parser.add_argument("--timeout", type=int, default=45000, help="Timeout (ms)")
     
     args = parser.parse_args()
+    
+    print("\n" + "="*60)
+    print("Garena Phone Recovery Tool v4")
+    print("="*60)
+    
+    # Load proxies auto from proxies.txt
+    proxy_list = await read_proxy_file(args.proxy_list)
+    proxy_rotator = None
+    if proxy_list:
+        proxy_rotator = ProxyRotator(proxy_list)
+        print(f"[PROXY] Ready to rotate {len(proxy_list)} proxies")
+    else:
+        print(f"[WARN] No proxies loaded, running without proxy")
+    
+    print(f"[CONFIG] Phase delays: {args.phase_delay}s | Recovery: {args.phase3_delay}s\n")
     
     # Get accounts from interactive input
     accounts = get_accounts_interactive()
@@ -750,17 +777,6 @@ async def main():
         return
     
     print(f"\n[OK] Loaded {len(accounts)} accounts")
-    
-    # Load proxies
-    proxy_list = await read_proxy_file(args.proxy_list)
-    proxy_rotator = None
-    if proxy_list:
-        proxy_rotator = ProxyRotator(proxy_list)
-        print(f"[PROXY] Loaded {len(proxy_list)} proxies")
-    else:
-        print(f"[WARN] No proxies loaded, running without proxy")
-    
-    print(f"[CONFIG] Phase delays: {args.phase_delay}s | Recovery: {args.phase3_delay}s")
     
     # Process accounts
     results: List[RecoveryResult] = []
